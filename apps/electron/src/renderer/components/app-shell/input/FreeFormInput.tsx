@@ -337,6 +337,37 @@ export function FreeFormInput({
     }, [syncToParent]),
   })
 
+  // Push-to-talk keyboard shortcut: Option+Space (Alt+Space on Windows/Linux)
+  // Hold to record, release to stop and transcribe
+  React.useEffect(() => {
+    if (!voiceInput.isSupported) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Option+Space (Alt+Space) - start recording
+      if (e.altKey && e.code === 'Space' && !e.repeat) {
+        e.preventDefault()
+        if (!voiceInput.isRecording && !voiceInput.isTranscribing) {
+          voiceInput.startRecording()
+        }
+      }
+    }
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      // Release Option+Space - stop recording
+      if (e.code === 'Space' && voiceInput.isRecording) {
+        e.preventDefault()
+        voiceInput.stopRecording()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [voiceInput.isSupported, voiceInput.isRecording, voiceInput.isTranscribing, voiceInput.startRecording, voiceInput.stopRecording])
+
   // Calculate max height: min(66% of window height, 540px)
   React.useEffect(() => {
     const updateMaxHeight = () => {
@@ -1628,7 +1659,7 @@ export function FreeFormInput({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                {voiceInput.isTranscribing ? 'Transcribing...' : voiceInput.isRecording ? 'Stop recording' : 'Voice input'}
+                {voiceInput.isTranscribing ? 'Transcribing...' : voiceInput.isRecording ? 'Release to transcribe' : 'Voice input (⌥Space to hold)'}
               </TooltipContent>
             </Tooltip>
           )}
