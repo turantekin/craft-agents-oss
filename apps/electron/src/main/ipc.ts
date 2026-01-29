@@ -2454,24 +2454,32 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       // Convert base64 to buffer
       const audioBuffer = Buffer.from(audioBase64, 'base64')
 
-      // Create form data for the API request
+      // Create form data using form-data package and get as buffer
       const FormData = (await import('form-data')).default
       const form = new FormData()
+
+      // Determine file extension from mime type
+      const ext = mimeType?.includes('mp4') ? 'mp4' : mimeType?.includes('ogg') ? 'ogg' : 'webm'
+
       form.append('file', audioBuffer, {
-        filename: 'audio.webm',
+        filename: `audio.${ext}`,
         contentType: mimeType || 'audio/webm',
       })
       form.append('model', 'whisper-1')
       form.append('response_format', 'text')
+
+      // Get form as buffer for proper multipart handling
+      const formBuffer = form.getBuffer()
+      const formHeaders = form.getHeaders()
 
       // Call OpenAI Whisper API
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${openaiApiKey}`,
-          ...form.getHeaders(),
+          ...formHeaders,
         },
-        body: form as unknown as BodyInit,
+        body: formBuffer,
       })
 
       if (!response.ok) {
