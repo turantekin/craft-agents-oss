@@ -140,6 +140,7 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
     }
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      console.error('[useVoiceInput] Error:', event.error, event.message)
       const errorMessage = getErrorMessage(event.error)
       setError(errorMessage)
       onError?.(errorMessage)
@@ -147,7 +148,24 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
     }
 
     recognition.onend = () => {
+      console.log('[useVoiceInput] Recognition ended')
       setIsRecording(false)
+    }
+
+    recognition.onaudiostart = () => {
+      console.log('[useVoiceInput] Audio capture started')
+    }
+
+    recognition.onspeechstart = () => {
+      console.log('[useVoiceInput] Speech detected')
+    }
+
+    recognition.onspeechend = () => {
+      console.log('[useVoiceInput] Speech ended')
+    }
+
+    recognition.onnomatch = () => {
+      console.log('[useVoiceInput] No speech match')
     }
 
     return recognition
