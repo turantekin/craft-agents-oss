@@ -337,26 +337,49 @@ export function FreeFormInput({
     }, [syncToParent]),
   })
 
-  // Push-to-talk keyboard shortcut: Option+Space (Alt+Space on Windows/Linux)
+  // Push-to-talk keyboard shortcut: Hold Command (Mac) / Ctrl (Windows/Linux)
   // Hold to record, release to stop and transcribe
+  // Uses a 300ms delay to avoid triggering on quick Cmd+key combos
+  const voiceRecordingTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
   React.useEffect(() => {
     if (!voiceInput.isSupported) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Option+Space (Alt+Space) - start recording
-      if (e.altKey && e.code === 'Space' && !e.repeat) {
-        e.preventDefault()
-        if (!voiceInput.isRecording && !voiceInput.isTranscribing) {
-          voiceInput.startRecording()
+      // Command key (Meta on Mac, Control on Windows/Linux)
+      const isCmdKey = e.key === 'Meta' || e.key === 'Control'
+
+      if (isCmdKey && !e.repeat && !voiceInput.isRecording && !voiceInput.isTranscribing) {
+        // Start a timer - only begin recording if key is held for 300ms
+        // This prevents triggering on quick Cmd+C, Cmd+V, etc.
+        if (!voiceRecordingTimerRef.current) {
+          voiceRecordingTimerRef.current = setTimeout(() => {
+            voiceInput.startRecording()
+            voiceRecordingTimerRef.current = null
+          }, 300)
         }
+      }
+
+      // If any other key is pressed while Cmd is down, cancel the timer
+      if (!isCmdKey && voiceRecordingTimerRef.current) {
+        clearTimeout(voiceRecordingTimerRef.current)
+        voiceRecordingTimerRef.current = null
       }
     }
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      // Release Option+Space - stop recording
-      if (e.code === 'Space' && voiceInput.isRecording) {
-        e.preventDefault()
-        voiceInput.stopRecording()
+      const isCmdKey = e.key === 'Meta' || e.key === 'Control'
+
+      if (isCmdKey) {
+        // Cancel timer if released before 300ms
+        if (voiceRecordingTimerRef.current) {
+          clearTimeout(voiceRecordingTimerRef.current)
+          voiceRecordingTimerRef.current = null
+        }
+        // Stop recording if it was active
+        if (voiceInput.isRecording) {
+          voiceInput.stopRecording()
+        }
       }
     }
 
@@ -365,6 +388,9 @@ export function FreeFormInput({
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      if (voiceRecordingTimerRef.current) {
+        clearTimeout(voiceRecordingTimerRef.current)
+      }
     }
   }, [voiceInput.isSupported, voiceInput.isRecording, voiceInput.isTranscribing, voiceInput.startRecording, voiceInput.stopRecording])
 
@@ -1659,7 +1685,7 @@ export function FreeFormInput({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                {voiceInput.isTranscribing ? 'Transcribing...' : voiceInput.isRecording ? 'Release to transcribe' : 'Voice input (⌥Space to hold)'}
+                {voiceInput.isTranscribing ? 'Transcribing...' : voiceInput.isRecording ? 'Release ⌘ to transcribe' : 'Voice input (hold ⌘)'}
               </TooltipContent>
             </Tooltip>
           )}

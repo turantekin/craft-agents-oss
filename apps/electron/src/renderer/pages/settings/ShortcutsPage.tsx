@@ -65,6 +65,7 @@ const sections: ShortcutSection[] = [
       { keys: ['Enter'], description: 'Send message' },
       { keys: ['Shift', 'Enter'], description: 'New line' },
       { keys: [cmdKey, 'Enter'], description: 'Send message' },
+      { keys: [`Hold ${cmdKey}`], description: 'Voice input (push-to-talk)' },
     ],
   },
 ]
