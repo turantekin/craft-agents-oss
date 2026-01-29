@@ -323,10 +323,10 @@ export function FreeFormInput({
   // Double-Esc interrupt: show warning overlay on first Esc, interrupt on second
   const { showEscapeOverlay } = useEscapeInterrupt()
 
-  // Voice input using Web Speech API
+  // Voice input using OpenAI Whisper API
   const voiceInput = useVoiceInput({
-    onTranscript: React.useCallback((text: string, isFinal: boolean) => {
-      if (isFinal && text.trim()) {
+    onTranscript: React.useCallback((text: string) => {
+      if (text.trim()) {
         // Append transcribed text to input (with space if input already has content)
         setInput(prev => {
           const newValue = prev ? `${prev} ${text.trim()}` : text.trim()
@@ -1612,12 +1612,15 @@ export function FreeFormInput({
                   variant="ghost"
                   className={cn(
                     "h-7 w-7 rounded-full shrink-0 ml-1",
-                    voiceInput.isRecording && "bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                    voiceInput.isRecording && "bg-red-500/10 text-red-500 hover:bg-red-500/20",
+                    voiceInput.isTranscribing && "bg-blue-500/10 text-blue-500"
                   )}
                   onClick={voiceInput.toggleRecording}
-                  disabled={disabled || isProcessing}
+                  disabled={disabled || isProcessing || voiceInput.isTranscribing}
                 >
-                  {voiceInput.isRecording ? (
+                  {voiceInput.isTranscribing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : voiceInput.isRecording ? (
                     <MicOff className="h-4 w-4" />
                   ) : (
                     <Mic className="h-4 w-4" />
@@ -1625,7 +1628,7 @@ export function FreeFormInput({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                {voiceInput.isRecording ? 'Stop recording' : 'Voice input'}
+                {voiceInput.isTranscribing ? 'Transcribing...' : voiceInput.isRecording ? 'Stop recording' : 'Voice input'}
               </TooltipContent>
             </Tooltip>
           )}

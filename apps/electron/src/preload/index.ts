@@ -432,6 +432,10 @@ const api: ElectronAPI = {
   menuCopy: () => ipcRenderer.invoke(IPC_CHANNELS.MENU_COPY),
   menuPaste: () => ipcRenderer.invoke(IPC_CHANNELS.MENU_PASTE),
   menuSelectAll: () => ipcRenderer.invoke(IPC_CHANNELS.MENU_SELECT_ALL),
+
+  // Voice transcription (OpenAI Whisper)
+  voiceTranscribe: (audioBase64: string, mimeType: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.VOICE_TRANSCRIBE, audioBase64, mimeType),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

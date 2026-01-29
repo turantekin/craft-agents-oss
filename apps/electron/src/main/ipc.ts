@@ -2413,4 +2413,60 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   // Note: Permission mode cycling settings (cyclablePermissionModes) are now workspace-level
   // and managed via WORKSPACE_SETTINGS_GET/UPDATE channels
 
+  // Voice transcription using OpenAI Whisper API
+  ipcMain.handle(IPC_CHANNELS.VOICE_TRANSCRIBE, async (_event, audioBase64: string, mimeType: string): Promise<{ success: boolean; text?: string; error?: string }> => {
+    try {
+      // Get OpenAI API key from environment or preferences
+      const openaiApiKey = process.env.OPENAI_API_KEY
+
+      if (!openaiApiKey) {
+        return {
+          success: false,
+          error: 'OpenAI API key not configured. Set OPENAI_API_KEY environment variable.'
+        }
+      }
+
+      // Convert base64 to buffer
+      const audioBuffer = Buffer.from(audioBase64, 'base64')
+
+      // Create form data for the API request
+      const FormData = (await import('form-data')).default
+      const form = new FormData()
+      form.append('file', audioBuffer, {
+        filename: 'audio.webm',
+        contentType: mimeType || 'audio/webm',
+      })
+      form.append('model', 'whisper-1')
+      form.append('response_format', 'text')
+
+      // Call OpenAI Whisper API
+      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiApiKey}`,
+          ...form.getHeaders(),
+        },
+        body: form as unknown as BodyInit,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('[voice:transcribe] API error:', response.status, errorText)
+        return {
+          success: false,
+          error: `Transcription failed: ${response.status} ${response.statusText}`
+        }
+      }
+
+      const text = await response.text()
+      return { success: true, text: text.trim() }
+    } catch (error) {
+      console.error('[voice:transcribe] Error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Transcription failed'
+      }
+    }
+  })
+
 }

@@ -1,69 +1,15 @@
 /**
- * useVoiceInput - Hook for voice-to-text input using Web Speech API
+ * useVoiceInput - Hook for voice-to-text input using OpenAI Whisper API
  *
- * Uses the browser's built-in SpeechRecognition API (available in Chromium/Electron)
- * to convert speech to text in real-time.
+ * Uses MediaRecorder API to capture audio and sends it to Whisper for transcription.
+ * This approach works reliably in Electron without browser microphone permission issues.
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 
-// Web Speech API types (not fully typed in TypeScript)
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList
-  resultIndex: number
-}
-
-interface SpeechRecognitionResultList {
-  length: number
-  item(index: number): SpeechRecognitionResult
-  [index: number]: SpeechRecognitionResult
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean
-  length: number
-  item(index: number): SpeechRecognitionAlternative
-  [index: number]: SpeechRecognitionAlternative
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string
-  confidence: number
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string
-  message?: string
-}
-
-// Get the SpeechRecognition constructor (vendor-prefixed in some browsers)
-const SpeechRecognition =
-  (window as unknown as { SpeechRecognition?: new () => SpeechRecognition }).SpeechRecognition ||
-  (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognition }).webkitSpeechRecognition
-
-// Log availability for debugging
-console.log('[useVoiceInput] SpeechRecognition available:', !!SpeechRecognition)
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean
-  interimResults: boolean
-  lang: string
-  start(): void
-  stop(): void
-  abort(): void
-  onresult: ((event: SpeechRecognitionEvent) => void) | null
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null
-  onend: (() => void) | null
-  onstart: (() => void) | null
-}
-
 export interface UseVoiceInputOptions {
-  /** Language for speech recognition (default: 'en-US') */
-  lang?: string
-  /** Whether to return interim (partial) results (default: true) */
-  interimResults?: boolean
   /** Callback when transcription is received */
-  onTranscript?: (text: string, isFinal: boolean) => void
+  onTranscript?: (text: string) => void
   /** Callback when an error occurs */
   onError?: (error: string) => void
 }
@@ -73,11 +19,13 @@ export interface UseVoiceInputReturn {
   isSupported: boolean
   /** Whether currently recording */
   isRecording: boolean
-  /** Current transcript (interim + final) */
+  /** Whether transcription is in progress */
+  isTranscribing: boolean
+  /** Current transcript */
   transcript: string
   /** Start recording */
   startRecording: () => void
-  /** Stop recording */
+  /** Stop recording and transcribe */
   stopRecording: () => void
   /** Toggle recording on/off */
   toggleRecording: () => void
@@ -88,133 +36,142 @@ export interface UseVoiceInputReturn {
 }
 
 export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInputReturn {
-  const {
-    lang = 'en-US',
-    interimResults = true,
-    onTranscript,
-    onError,
-  } = options
+  const { onTranscript, onError } = options
 
   const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null)
-  const finalTranscriptRef = useRef('')
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
 
-  const isSupported = !!SpeechRecognition
-
-  // Initialize speech recognition
-  const initRecognition = useCallback(() => {
-    if (!SpeechRecognition) return null
-
-    const recognition = new SpeechRecognition()
-    recognition.continuous = true
-    recognition.interimResults = interimResults
-    recognition.lang = lang
-
-    recognition.onstart = () => {
-      console.log('[useVoiceInput] Recognition started')
-      setIsRecording(true)
-      setError(null)
-    }
-
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      console.log('[useVoiceInput] Got result:', event.results.length, 'results')
-      let interimTranscript = ''
-      let finalTranscript = finalTranscriptRef.current
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i]
-        if (result.isFinal) {
-          finalTranscript += result[0].transcript
-          finalTranscriptRef.current = finalTranscript
-          onTranscript?.(result[0].transcript, true)
-        } else {
-          interimTranscript += result[0].transcript
-          onTranscript?.(result[0].transcript, false)
-        }
-      }
-
-      setTranscript(finalTranscript + interimTranscript)
-    }
-
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      console.error('[useVoiceInput] Error:', event.error, event.message)
-      const errorMessage = getErrorMessage(event.error)
-      setError(errorMessage)
-      onError?.(errorMessage)
-      setIsRecording(false)
-    }
-
-    recognition.onend = () => {
-      console.log('[useVoiceInput] Recognition ended')
-      setIsRecording(false)
-    }
-
-    recognition.onaudiostart = () => {
-      console.log('[useVoiceInput] Audio capture started')
-    }
-
-    recognition.onspeechstart = () => {
-      console.log('[useVoiceInput] Speech detected')
-    }
-
-    recognition.onspeechend = () => {
-      console.log('[useVoiceInput] Speech ended')
-    }
-
-    recognition.onnomatch = () => {
-      console.log('[useVoiceInput] No speech match')
-    }
-
-    return recognition
-  }, [lang, interimResults, onTranscript, onError])
+  // Check if MediaRecorder is supported
+  const isSupported = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
 
   // Start recording
-  const startRecording = useCallback(() => {
+  const startRecording = useCallback(async () => {
     console.log('[useVoiceInput] startRecording called, isSupported:', isSupported)
 
     if (!isSupported) {
-      const msg = 'Speech recognition is not supported in this browser'
+      const msg = 'Voice recording is not supported in this browser'
       console.error('[useVoiceInput]', msg)
       setError(msg)
       onError?.(msg)
       return
     }
 
-    // Stop any existing recognition
-    if (recognitionRef.current) {
-      recognitionRef.current.abort()
-    }
-
     // Reset state
-    finalTranscriptRef.current = ''
+    chunksRef.current = []
     setTranscript('')
     setError(null)
 
-    // Create and start new recognition
-    const recognition = initRecognition()
-    console.log('[useVoiceInput] Recognition instance created:', !!recognition)
+    try {
+      console.log('[useVoiceInput] Requesting microphone access...')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      console.log('[useVoiceInput] Microphone access granted')
 
-    if (recognition) {
-      recognitionRef.current = recognition
-      try {
-        console.log('[useVoiceInput] Starting recognition...')
-        recognition.start()
-        console.log('[useVoiceInput] recognition.start() called')
-      } catch (err) {
-        console.error('[useVoiceInput] Failed to start:', err)
-        setError('Failed to start voice recognition')
+      // Determine the best supported audio format
+      let mimeType = 'audio/webm'
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus'
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4'
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg'
       }
+      console.log('[useVoiceInput] Using MIME type:', mimeType)
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType })
+      mediaRecorderRef.current = mediaRecorder
+
+      mediaRecorder.ondataavailable = (event) => {
+        console.log('[useVoiceInput] Data available, size:', event.data.size)
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data)
+        }
+      }
+
+      mediaRecorder.onstart = () => {
+        console.log('[useVoiceInput] Recording started')
+        setIsRecording(true)
+      }
+
+      mediaRecorder.onstop = async () => {
+        console.log('[useVoiceInput] Recording stopped, chunks:', chunksRef.current.length)
+        setIsRecording(false)
+
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach(track => track.stop())
+        streamRef.current = null
+
+        if (chunksRef.current.length === 0) {
+          const msg = 'No audio recorded'
+          setError(msg)
+          onError?.(msg)
+          return
+        }
+
+        // Combine chunks into a single blob
+        const audioBlob = new Blob(chunksRef.current, { type: mimeType })
+        console.log('[useVoiceInput] Audio blob size:', audioBlob.size)
+
+        // Convert to base64 and send to Whisper
+        setIsTranscribing(true)
+        try {
+          const base64 = await blobToBase64(audioBlob)
+          console.log('[useVoiceInput] Sending to Whisper API...')
+
+          const result = await window.electronAPI.voiceTranscribe(base64, mimeType)
+          console.log('[useVoiceInput] Whisper result:', result)
+
+          if (result.success && result.text) {
+            setTranscript(result.text)
+            onTranscript?.(result.text)
+          } else {
+            const errorMsg = result.error || 'Transcription failed'
+            setError(errorMsg)
+            onError?.(errorMsg)
+          }
+        } catch (err) {
+          console.error('[useVoiceInput] Transcription error:', err)
+          const errorMsg = err instanceof Error ? err.message : 'Transcription failed'
+          setError(errorMsg)
+          onError?.(errorMsg)
+        } finally {
+          setIsTranscribing(false)
+        }
+      }
+
+      mediaRecorder.onerror = (event) => {
+        console.error('[useVoiceInput] MediaRecorder error:', event)
+        setError('Recording error')
+        onError?.('Recording error')
+        setIsRecording(false)
+      }
+
+      // Start recording with timeslice to get data periodically
+      mediaRecorder.start(1000)
+    } catch (err) {
+      console.error('[useVoiceInput] Failed to start recording:', err)
+      const errorMsg = getErrorMessage(err)
+      setError(errorMsg)
+      onError?.(errorMsg)
     }
-  }, [isSupported, initRecognition, onError])
+  }, [isSupported, onError, onTranscript])
 
   // Stop recording
   const stopRecording = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
-      recognitionRef.current = null
+    console.log('[useVoiceInput] stopRecording called')
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
+    // Also stop stream tracks as backup
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
     }
   }, [])
 
@@ -229,15 +186,17 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
 
   // Clear transcript
   const clearTranscript = useCallback(() => {
-    finalTranscriptRef.current = ''
     setTranscript('')
   }, [])
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort()
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop()
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
       }
     }
   }, [])
@@ -245,6 +204,7 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
   return {
     isSupported,
     isRecording,
+    isTranscribing,
     transcript,
     startRecording,
     stopRecording,
@@ -255,23 +215,43 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
 }
 
 /**
- * Convert speech recognition error codes to user-friendly messages
+ * Convert a Blob to base64 string
  */
-function getErrorMessage(errorCode: string): string {
-  switch (errorCode) {
-    case 'no-speech':
-      return 'No speech detected. Please try again.'
-    case 'audio-capture':
-      return 'No microphone found. Please check your microphone settings.'
-    case 'not-allowed':
-      return 'Microphone access denied. Please allow microphone access in your browser settings.'
-    case 'network':
-      return 'Network error. Please check your internet connection.'
-    case 'aborted':
-      return 'Voice input was cancelled.'
-    case 'service-not-allowed':
-      return 'Speech recognition service is not allowed.'
-    default:
-      return `Voice recognition error: ${errorCode}`
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') {
+        // Remove the data URL prefix (e.g., "data:audio/webm;base64,")
+        const base64 = reader.result.split(',')[1]
+        resolve(base64)
+      } else {
+        reject(new Error('Failed to convert blob to base64'))
+      }
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
+/**
+ * Convert errors to user-friendly messages
+ */
+function getErrorMessage(err: unknown): string {
+  if (err instanceof DOMException) {
+    switch (err.name) {
+      case 'NotAllowedError':
+        return 'Microphone access denied. Please allow microphone access in System Preferences > Privacy & Security > Microphone.'
+      case 'NotFoundError':
+        return 'No microphone found. Please check your microphone settings.'
+      case 'NotReadableError':
+        return 'Microphone is in use by another application.'
+      default:
+        return `Microphone error: ${err.message}`
+    }
   }
+  if (err instanceof Error) {
+    return err.message
+  }
+  return 'Failed to start voice recording'
 }

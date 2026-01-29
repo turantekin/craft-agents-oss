@@ -699,6 +699,9 @@ export const IPC_CHANNELS = {
   MENU_COPY: 'menu:copy',
   MENU_PASTE: 'menu:paste',
   MENU_SELECT_ALL: 'menu:selectAll',
+
+  // Voice input (Whisper transcription)
+  VOICE_TRANSCRIBE: 'voice:transcribe',
 } as const
 
 // Re-import types for ElectronAPI
@@ -964,6 +967,9 @@ export interface ElectronAPI {
   menuCopy(): Promise<void>
   menuPaste(): Promise<void>
   menuSelectAll(): Promise<void>
+
+  // Voice transcription (OpenAI Whisper)
+  voiceTranscribe(audioBase64: string, mimeType: string): Promise<{ success: boolean; text?: string; error?: string }>
 }
 
 /**
