@@ -227,6 +227,22 @@ export class CredentialManager {
     });
   }
 
+  /** Get OpenAI API key (for Whisper voice transcription) */
+  async getOpenAIApiKey(): Promise<string | null> {
+    const cred = await this.get({ type: 'openai_api_key' });
+    return cred?.value || null;
+  }
+
+  /** Set OpenAI API key (for Whisper voice transcription) */
+  async setOpenAIApiKey(key: string): Promise<void> {
+    await this.set({ type: 'openai_api_key' }, { value: key });
+  }
+
+  /** Delete OpenAI API key */
+  async deleteOpenAIApiKey(): Promise<boolean> {
+    return this.delete({ type: 'openai_api_key' });
+  }
+
   /** Get workspace MCP OAuth credentials */
   async getWorkspaceOAuth(workspaceId: string): Promise<{
     accessToken: string;

@@ -15,9 +15,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
-import { X } from 'lucide-react'
+import { X, Eye, EyeOff, Check } from 'lucide-react'
 import { Spinner, FullscreenOverlayBase } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
 import { fullscreenOverlayOpenAtom } from '@/atoms/overlay'
@@ -56,6 +57,13 @@ export default function AppSettingsPage() {
   // Notifications state
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
 
+  // OpenAI API key state (for voice transcription)
+  const [openAIKey, setOpenAIKey] = useState('')
+  const [openAIKeyInput, setOpenAIKeyInput] = useState('')
+  const [showOpenAIKey, setShowOpenAIKey] = useState(false)
+  const [openAIKeySaving, setOpenAIKeySaving] = useState(false)
+  const [openAIKeySaved, setOpenAIKeySaved] = useState(false)
+
   // Auto-update state
   const updateChecker = useUpdateChecker()
   const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false)
@@ -73,13 +81,18 @@ export default function AppSettingsPage() {
   const loadConnectionInfo = useCallback(async () => {
     if (!window.electronAPI) return
     try {
-      const [billing, notificationsOn] = await Promise.all([
+      const [billing, notificationsOn, openAIApiKey] = await Promise.all([
         window.electronAPI.getApiSetup(),
         window.electronAPI.getNotificationsEnabled(),
+        window.electronAPI.getOpenAIKey(),
       ])
       setAuthType(billing.authType)
       setHasCredential(billing.hasCredential)
       setNotificationsEnabled(notificationsOn)
+      if (openAIApiKey) {
+        setOpenAIKey(openAIApiKey)
+        setOpenAIKeyInput(openAIApiKey)
+      }
     } catch (error) {
       console.error('Failed to load settings:', error)
     }
@@ -128,6 +141,33 @@ export default function AppSettingsPage() {
     await window.electronAPI.setNotificationsEnabled(enabled)
   }, [])
 
+  // Save OpenAI API key
+  const handleSaveOpenAIKey = useCallback(async () => {
+    if (!openAIKeyInput.trim()) return
+    setOpenAIKeySaving(true)
+    try {
+      await window.electronAPI.setOpenAIKey(openAIKeyInput.trim())
+      setOpenAIKey(openAIKeyInput.trim())
+      setOpenAIKeySaved(true)
+      setTimeout(() => setOpenAIKeySaved(false), 2000)
+    } catch (error) {
+      console.error('Failed to save OpenAI key:', error)
+    } finally {
+      setOpenAIKeySaving(false)
+    }
+  }, [openAIKeyInput])
+
+  // Delete OpenAI API key
+  const handleDeleteOpenAIKey = useCallback(async () => {
+    try {
+      await window.electronAPI.deleteOpenAIKey()
+      setOpenAIKey('')
+      setOpenAIKeyInput('')
+    } catch (error) {
+      console.error('Failed to delete OpenAI key:', error)
+    }
+  }, [])
+
   return (
     <div className="h-full flex flex-col">
       <PanelHeader title="App Settings" actions={<HeaderMenu route={routes.view.settings('app')} helpFeature="app-settings" />} />
@@ -167,6 +207,65 @@ export default function AppSettingsPage() {
                   >
                     Edit
                   </Button>
+                </SettingsRow>
+              </SettingsCard>
+            </SettingsSection>
+
+            {/* Integrations */}
+            <SettingsSection title="Integrations" description="Connect external services for additional features.">
+              <SettingsCard>
+                <SettingsRow
+                  label="OpenAI API Key"
+                  description="Used for voice-to-text transcription (Whisper). Get your key from platform.openai.com"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Input
+                        type={showOpenAIKey ? 'text' : 'password'}
+                        value={openAIKeyInput}
+                        onChange={(e) => setOpenAIKeyInput(e.target.value)}
+                        placeholder="sk-..."
+                        className="w-[280px] pr-8 font-mono text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowOpenAIKey(!showOpenAIKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showOpenAIKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSaveOpenAIKey}
+                      disabled={!openAIKeyInput.trim() || openAIKeyInput === openAIKey || openAIKeySaving}
+                    >
+                      {openAIKeySaved ? (
+                        <>
+                          <Check className="h-4 w-4 mr-1" />
+                          Saved
+                        </>
+                      ) : openAIKeySaving ? (
+                        <>
+                          <Spinner className="mr-1" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save'
+                      )}
+                    </Button>
+                    {openAIKey && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleDeleteOpenAIKey}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
                 </SettingsRow>
               </SettingsCard>
             </SettingsSection>

@@ -173,6 +173,11 @@ const api: ElectronAPI = {
   testApiConnection: (apiKey: string, baseUrl?: string, modelName?: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_TEST_API_CONNECTION, apiKey, baseUrl, modelName),
 
+  // Settings - OpenAI (for Whisper voice transcription)
+  getOpenAIKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_OPENAI_KEY),
+  setOpenAIKey: (apiKey: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_OPENAI_KEY, apiKey),
+  deleteOpenAIKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_DELETE_OPENAI_KEY),
+
   // Settings - Model (global default)
   getModel: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_MODEL),
   setModel: (model: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_MODEL, model),

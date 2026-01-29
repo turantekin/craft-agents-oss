@@ -577,6 +577,11 @@ export const IPC_CHANNELS = {
   SETTINGS_UPDATE_API_SETUP: 'settings:updateApiSetup',
   SETTINGS_TEST_API_CONNECTION: 'settings:testApiConnection',
 
+  // Settings - OpenAI (for Whisper voice transcription)
+  SETTINGS_GET_OPENAI_KEY: 'settings:getOpenAIKey',
+  SETTINGS_SET_OPENAI_KEY: 'settings:setOpenAIKey',
+  SETTINGS_DELETE_OPENAI_KEY: 'settings:deleteOpenAIKey',
+
   // Settings - Model
   SETTINGS_GET_MODEL: 'settings:getModel',
   SETTINGS_SET_MODEL: 'settings:setModel',
@@ -829,6 +834,11 @@ export interface ElectronAPI {
   getApiSetup(): Promise<ApiSetupInfo>
   updateApiSetup(authType: AuthType, credential?: string, anthropicBaseUrl?: string | null, customModel?: string | null): Promise<void>
   testApiConnection(apiKey: string, baseUrl?: string, modelName?: string): Promise<{ success: boolean; error?: string; modelCount?: number }>
+
+  // Settings - OpenAI (for Whisper voice transcription)
+  getOpenAIKey(): Promise<string | null>
+  setOpenAIKey(apiKey: string): Promise<void>
+  deleteOpenAIKey(): Promise<void>
 
   // Settings - Model (global default)
   getModel(): Promise<string | null>

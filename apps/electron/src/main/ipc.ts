@@ -1387,6 +1387,30 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   })
 
   // ============================================================
+  // Settings - OpenAI (for Whisper voice transcription)
+  // ============================================================
+
+  // Get OpenAI API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_OPENAI_KEY, async (): Promise<string | null> => {
+    const manager = getCredentialManager()
+    return manager.getOpenAIApiKey()
+  })
+
+  // Set OpenAI API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_OPENAI_KEY, async (_event, apiKey: string) => {
+    const manager = getCredentialManager()
+    await manager.setOpenAIApiKey(apiKey.trim())
+    ipcLog.info('[Settings] OpenAI API key saved')
+  })
+
+  // Delete OpenAI API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_DELETE_OPENAI_KEY, async () => {
+    const manager = getCredentialManager()
+    await manager.deleteOpenAIApiKey()
+    ipcLog.info('[Settings] OpenAI API key deleted')
+  })
+
+  // ============================================================
   // Settings - Model (Global Default)
   // ============================================================
 
@@ -2416,13 +2440,14 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   // Voice transcription using OpenAI Whisper API
   ipcMain.handle(IPC_CHANNELS.VOICE_TRANSCRIBE, async (_event, audioBase64: string, mimeType: string): Promise<{ success: boolean; text?: string; error?: string }> => {
     try {
-      // Get OpenAI API key from environment or preferences
-      const openaiApiKey = process.env.OPENAI_API_KEY
+      // Get OpenAI API key from credentials (with fallback to env var for backwards compatibility)
+      const manager = getCredentialManager()
+      const openaiApiKey = await manager.getOpenAIApiKey() || process.env.OPENAI_API_KEY
 
       if (!openaiApiKey) {
         return {
           success: false,
-          error: 'OpenAI API key not configured. Set OPENAI_API_KEY environment variable.'
+          error: 'OpenAI API key not configured. Add your key in Settings → Integrations.'
         }
       }
 
