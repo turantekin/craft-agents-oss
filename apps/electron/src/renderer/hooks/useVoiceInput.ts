@@ -41,6 +41,9 @@ const SpeechRecognition =
   (window as unknown as { SpeechRecognition?: new () => SpeechRecognition }).SpeechRecognition ||
   (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognition }).webkitSpeechRecognition
 
+// Log availability for debugging
+console.log('[useVoiceInput] SpeechRecognition available:', !!SpeechRecognition)
+
 interface SpeechRecognition extends EventTarget {
   continuous: boolean
   interimResults: boolean
@@ -111,11 +114,13 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
     recognition.lang = lang
 
     recognition.onstart = () => {
+      console.log('[useVoiceInput] Recognition started')
       setIsRecording(true)
       setError(null)
     }
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      console.log('[useVoiceInput] Got result:', event.results.length, 'results')
       let interimTranscript = ''
       let finalTranscript = finalTranscriptRef.current
 
@@ -150,8 +155,11 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
 
   // Start recording
   const startRecording = useCallback(() => {
+    console.log('[useVoiceInput] startRecording called, isSupported:', isSupported)
+
     if (!isSupported) {
       const msg = 'Speech recognition is not supported in this browser'
+      console.error('[useVoiceInput]', msg)
       setError(msg)
       onError?.(msg)
       return
@@ -169,10 +177,14 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInput
 
     // Create and start new recognition
     const recognition = initRecognition()
+    console.log('[useVoiceInput] Recognition instance created:', !!recognition)
+
     if (recognition) {
       recognitionRef.current = recognition
       try {
+        console.log('[useVoiceInput] Starting recognition...')
         recognition.start()
+        console.log('[useVoiceInput] recognition.start() called')
       } catch (err) {
         console.error('[useVoiceInput] Failed to start:', err)
         setError('Failed to start voice recognition')
