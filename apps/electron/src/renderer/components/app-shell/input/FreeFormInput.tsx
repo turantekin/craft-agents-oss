@@ -10,6 +10,8 @@ import {
   DatabaseZap,
   ChevronDown,
   Loader2,
+  Mic,
+  MicOff,
 } from 'lucide-react'
 import { Icon_Home, Icon_Folder } from '@craft-agent/ui'
 
@@ -65,6 +67,7 @@ import { type ThinkingLevel, THINKING_LEVELS, getThinkingLevelName } from '@craf
 import { useEscapeInterrupt } from '@/context/EscapeInterruptContext'
 import { hasOpenOverlay } from '@/lib/overlay-detection'
 import { EscapeInterruptOverlay } from './EscapeInterruptOverlay'
+import { useVoiceInput } from '@/hooks/useVoiceInput'
 
 /**
  * Format token count for display (e.g., 1500 -> "1.5k", 200000 -> "200k")
@@ -319,6 +322,20 @@ export function FreeFormInput({
 
   // Double-Esc interrupt: show warning overlay on first Esc, interrupt on second
   const { showEscapeOverlay } = useEscapeInterrupt()
+
+  // Voice input using Web Speech API
+  const voiceInput = useVoiceInput({
+    onTranscript: React.useCallback((text: string, isFinal: boolean) => {
+      if (isFinal && text.trim()) {
+        // Append transcribed text to input (with space if input already has content)
+        setInput(prev => {
+          const newValue = prev ? `${prev} ${text.trim()}` : text.trim()
+          syncToParent(newValue)
+          return newValue
+        })
+      }
+    }, [syncToParent]),
+  })
 
   // Calculate max height: min(66% of window height, 540px)
   React.useEffect(() => {
@@ -1585,7 +1602,35 @@ export function FreeFormInput({
             )
           })()}
 
-          {/* 6. Send/Stop Button - Always show stop when processing */}
+          {/* 6. Voice Input Button */}
+          {voiceInput.isSupported && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className={cn(
+                    "h-7 w-7 rounded-full shrink-0 ml-1",
+                    voiceInput.isRecording && "bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                  )}
+                  onClick={voiceInput.toggleRecording}
+                  disabled={disabled || isProcessing}
+                >
+                  {voiceInput.isRecording ? (
+                    <MicOff className="h-4 w-4" />
+                  ) : (
+                    <Mic className="h-4 w-4" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {voiceInput.isRecording ? 'Stop recording' : 'Voice input'}
+              </TooltipContent>
+            </Tooltip>
+          )}
+
+          {/* 7. Send/Stop Button - Always show stop when processing */}
           {isProcessing ? (
             <Button
               type="button"
