@@ -56,11 +56,22 @@ export function fuzzyFilter<T>(
   const info = uf.info(idxs, haystack, query)
   const order = uf.sort(info, haystack, query)
 
-  return order.map((i) => ({
-    item: items[idxs[i]],
-    score: info.score?.[i] ?? 0,
-    ranges: info.ranges?.[i],
-  }))
+  // uFuzzy doesn't have a score property - use position in sorted order as relative score
+  // Higher score = better match (reverse of order index)
+  const results: FuzzyResult<T>[] = []
+  for (let sortPosition = 0; sortPosition < order.length; sortPosition++) {
+    const orderIdx = order[sortPosition] as number
+    const haystackIdx = idxs[orderIdx] as number
+    const item = items[haystackIdx]
+    if (item === undefined) continue
+    const rangeData = info.ranges?.[orderIdx]
+    results.push({
+      item,
+      score: order.length - sortPosition, // Best matches first get highest scores
+      ranges: rangeData ? [rangeData] : undefined,
+    })
+  }
+  return results
 }
 
 /**
@@ -81,9 +92,8 @@ export function fuzzyScore(text: string, query: string): number {
   const idxs = uf.filter([text], query)
   if (!idxs || idxs.length === 0) return 0
 
-  const info = uf.info(idxs, [text], query)
-  // info.score can be undefined if no scoring info available
-  return info.score?.[0] ?? 1
+  // uFuzzy matched - return a positive score (actual score depends on sort order in list context)
+  return 1
 }
 
 /**
