@@ -122,6 +122,8 @@ export interface CraftAgentConfig {
     enabled: boolean;          // Whether debug mode is active
     logFilePath?: string;      // Path to the log file for querying
   };
+  /** System prompt preset for mini agents ('default' | 'mini' or custom string) */
+  systemPromptPreset?: 'default' | 'mini' | string;
 }
 
 // Permission request tracking
@@ -806,35 +808,49 @@ export class CraftAgent {
         return;
       }
 
+      // Detect mini agent mode early (needed for tool/MCP restrictions)
+      const isMiniAgent = this.config.systemPromptPreset === 'mini';
+
       // Block SDK tools that require UI we don't have:
       // - EnterPlanMode/ExitPlanMode: We use safe mode instead (user-controlled via UI)
       // - AskUserQuestion: Requires interactive UI to show question options to user
+      // Note: Mini agents use a minimal tool list directly, so no additional blocking needed
       const disallowedTools: string[] = ['EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion'];
 
-      // Build MCP servers config - always use HTTP (SDK handles sources efficiently)
-      // Filter out stdio servers if local MCP is disabled
+      // Build MCP servers config
+      // Mini agents: only session tools (config_validate) to minimize token usage
+      // Regular agents: full set including preferences, docs, and user sources
       const sourceMcpResult = this.getSourceMcpServersFiltered();
 
       debug('[chat] sourceMcpServers:', sourceMcpResult.servers);
       debug('[chat] sourceApiServers:', this.sourceApiServers);
 
-      const mcpServers: Options['mcpServers'] = {
-        preferences: getPreferencesServer(false),
-        // Session-scoped tools (SubmitPlan, source_test, etc.)
-        session: getSessionScopedTools(sessionId, this.workspaceRootPath),
-        // Delegation tools (Perplexity search, Gemini analysis) - always available
-        delegation: getDelegationToolsServer(),
-        // Craft Agents documentation - always available for searching setup guides
-        // This is a public Mintlify MCP server, no auth needed
-        'craft-agents-docs': {
-          type: 'http',
-          url: 'https://agents.craft.do/docs/mcp',
-        },
-        // Add user-defined source servers (MCP and API, filtered by local MCP setting)
-        // Note: Craft MCP server is now added via sources system
-        ...sourceMcpResult.servers,
-        ...this.sourceApiServers,
-      };
+      const mcpServers: Options['mcpServers'] = isMiniAgent
+        ? {
+            // Mini agents need session tools (config_validate) and docs for reference
+            session: getSessionScopedTools(sessionId, this.workspaceRootPath),
+            'craft-agents-docs': {
+              type: 'http',
+              url: 'https://agents.craft.do/docs/mcp',
+            },
+          }
+        : {
+            preferences: getPreferencesServer(false),
+            // Session-scoped tools (SubmitPlan, source_test, etc.)
+            session: getSessionScopedTools(sessionId, this.workspaceRootPath),
+            // Delegation tools (Perplexity search, Gemini analysis) - always available
+            delegation: getDelegationToolsServer(),
+            // Craft Agents documentation - always available for searching setup guides
+            // This is a public Mintlify MCP server, no auth needed
+            'craft-agents-docs': {
+              type: 'http',
+              url: 'https://agents.craft.do/docs/mcp',
+            },
+            // Add user-defined source servers (MCP and API, filtered by local MCP setting)
+            // Note: Craft MCP server is now added via sources system
+            ...sourceMcpResult.servers,
+            ...this.sourceApiServers,
+          };
       
       // Configure SDK options
       // Resolve model: use tier name when using custom API (OpenRouter), else specific version
@@ -863,6 +879,18 @@ export class CraftAgent {
       const isClaude = isClaudeModel(model);
       const useAnthropicBetas = isClaude;
 
+      // Log mini agent mode details
+      if (isMiniAgent) {
+        debug('[CraftAgent] 🤖 MINI AGENT mode - optimized for quick config edits');
+        debug('[CraftAgent] Mini agent optimizations:', {
+          model,
+          tools: ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash'],
+          mcpServers: ['session', 'craft-agents-docs'],
+          thinking: 'disabled',
+          systemPrompt: 'lean (no Claude Code preset)',
+        });
+      }
+
       const options: Options = {
         ...getDefaultOptions(),
         model,
@@ -883,28 +911,40 @@ export class CraftAgent {
         ...(useAnthropicBetas ? { betas: ['advanced-tool-use-2025-11-20'] as any } : {}),
         // Extended thinking: tokens based on effective thinking level (session level + ultrathink override)
         // Non-Claude models don't support extended thinking, so pass 0 to disable
-        maxThinkingTokens: isClaude ? thinkingTokens : 0,
-        // Option A: Append to Claude Code's system prompt (recommended by docs)
-        // Use pinned values for consistency after compaction (SDK expects stable system prompt)
-        systemPrompt: {
-          type: 'preset',
-          preset: 'claude_code',
-          // Working directory included for monorepo context file discovery
-          append: getSystemPrompt(
-            this.pinnedPreferencesPrompt ?? undefined,
-            this.config.debugMode,
-            this.workspaceRootPath,
-            this.config.session?.workingDirectory
-          ),
-        },
+        // Mini agents also disable thinking for efficiency (quick config edits don't need deep reasoning)
+        maxThinkingTokens: isMiniAgent ? 0 : (isClaude ? thinkingTokens : 0),
+        // System prompt configuration:
+        // - Mini agents: Use custom (lean) system prompt without Claude Code preset
+        // - Normal agents: Append to Claude Code's system prompt (recommended by docs)
+        systemPrompt: this.config.systemPromptPreset === 'mini'
+          ? getSystemPrompt(undefined, undefined, this.workspaceRootPath, undefined, 'mini')
+          : {
+              type: 'preset' as const,
+              preset: 'claude_code' as const,
+              // Working directory included for monorepo context file discovery
+              append: getSystemPrompt(
+                this.pinnedPreferencesPrompt ?? undefined,
+                this.config.debugMode,
+                this.workspaceRootPath,
+                this.config.session?.workingDirectory
+              ),
+            },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.
         // This ensures SDK can always find session transcripts regardless of workingDirectory changes.
         // Note: workingDirectory is still used for context injection and shown to the agent.
         cwd: this.config.session?.sdkCwd ??
           (sessionId ? getSessionPath(this.workspaceRootPath, sessionId) : this.workspaceRootPath),
         includePartialMessages: true,
-        // Enable the full Claude Code toolset
-        tools: { type: 'preset', preset: 'claude_code' },
+        // Tools configuration:
+        // - Mini agents: minimal set for quick config edits (reduces token count ~70%)
+        // - Regular agents: full Claude Code toolset
+        tools: (() => {
+          const toolsValue = isMiniAgent
+            ? ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash']
+            : { type: 'preset' as const, preset: 'claude_code' as const };
+          debug('[CraftAgent] 🔧 Tools configuration:', JSON.stringify(toolsValue));
+          return toolsValue;
+        })(),
         // Bypass SDK's built-in permission system - we handle all permissions via PreToolUse hook
         // This allows Safe Mode to properly allow read-only bash commands without SDK interference
         permissionMode: 'bypassPermissions',
@@ -1545,12 +1585,15 @@ export class CraftAgent {
       //
       // This eliminates order-dependent matching. Same messages → same output.
       //
-      // Only two data structures are needed:
+      // Three data structures are needed:
       // - toolIndex: append-only map of toolUseId → {name, input} (order-independent)
       // - emittedToolStarts: append-only set for stream/assistant dedup (order-independent)
+      // - activeParentTools: tracks running Task tool IDs for fallback parent assignment
+      //   (used when SDK's parent_tool_use_id is null but a Task is active)
       // ═══════════════════════════════════════════════════════════════════════════
       const toolIndex = new ToolIndex();
       const emittedToolStarts = new Set<string>();
+      const activeParentTools = new Set<string>();
 
       // Process SDK messages and convert to AgentEvents
       let receivedComplete = false;
@@ -1585,10 +1628,11 @@ export class CraftAgent {
             this.config.onSdkSessionIdUpdate?.(message.session_id);
           }
 
-          const events = this.convertSDKMessage(
+          const events = await this.convertSDKMessage(
             message,
             toolIndex,
             emittedToolStarts,
+            activeParentTools,
             pendingTextForStopReason,
             (text) => { pendingTextForStopReason = text; },
             currentTurnId,
@@ -2344,9 +2388,85 @@ Please continue the conversation naturally from where we left off.
   }
 
   /**
-   * Map SDK assistant message error codes to typed error events with user-friendly messages.
+   * Parse actual API error from SDK debug log file.
+   * The SDK logs errors like: [ERROR] Error in non-streaming fallback: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Could not process image"},"request_id":"req_..."}
+   * These go to ~/.claude/debug/{sessionId}.txt, NOT to stderr.
+   *
+   * Uses async retries with non-blocking delays to handle race condition where
+   * SDK may still be writing to the debug file when the error event is received.
    */
-  private mapSDKErrorToTypedError(errorCode: SDKAssistantMessageError): { type: 'typed_error'; error: AgentError } {
+  private async parseApiErrorFromDebugLog(): Promise<{ errorType: string; message: string; requestId?: string } | null> {
+    if (!this.sessionId) return null;
+
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const debugFilePath = path.join(os.homedir(), '.claude', 'debug', `${this.sessionId}.txt`);
+
+    // Helper for non-blocking delay
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // Retry up to 3 times with 50ms delays to handle race condition
+    // where SDK emits error event before finishing debug file write
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (!fs.existsSync(debugFilePath)) {
+          // File doesn't exist yet, wait and retry
+          if (attempt < 2) {
+            await delay(50);
+            continue;
+          }
+          return null;
+        }
+
+        // Read the file and get last 50 lines to find recent errors
+        const content = fs.readFileSync(debugFilePath, 'utf-8');
+        const lines = content.split('\n').slice(-50);
+
+        // Search backwards for the most recent [ERROR] line with JSON
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i];
+          // Match [ERROR] lines containing JSON with error details
+          const errorMatch = line.match(/\[ERROR\].*?(\{.*\})/);
+          if (errorMatch && errorMatch[1]) {
+            try {
+              const parsed = JSON.parse(errorMatch[1]);
+              if (parsed?.error?.message) {
+                return {
+                  errorType: parsed.error.type || 'error',
+                  message: parsed.error.message,
+                  requestId: parsed.request_id,
+                };
+              }
+            } catch {
+              // Not valid JSON, continue searching
+            }
+          }
+        }
+
+        // File exists but no error found yet, wait and retry
+        if (attempt < 2) {
+          await delay(50);
+        }
+      } catch {
+        // File read error, wait and retry
+        if (attempt < 2) {
+          await delay(50);
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Map SDK assistant message error codes to typed error events with user-friendly messages.
+   * Reads from SDK debug log file to extract actual API error details.
+   */
+  private async mapSDKErrorToTypedError(
+    errorCode: SDKAssistantMessageError
+  ): Promise<{ type: 'typed_error'; error: AgentError }> {
+    // Try to extract actual error message from SDK debug log file
+    const actualError = await this.parseApiErrorFromDebugLog();
     const errorMap: Record<SDKAssistantMessageError, AgentError> = {
       'authentication_failed': {
         code: 'invalid_api_key',
@@ -2382,10 +2502,18 @@ Please continue the conversation naturally from where we left off.
         retryDelayMs: 5000,
       },
       'invalid_request': {
-        code: 'unknown_error',
+        code: 'invalid_request',
         title: 'Invalid Request',
-        message: 'The request was invalid.',
-        details: ['Try sending a new message', 'Report this issue if it persists'],
+        message: 'The API rejected this request.',
+        details: [
+          ...(actualError ? [
+            `Error: ${actualError.message}`,
+            `Type: ${actualError.errorType}`,
+            ...(actualError.requestId ? [`Request ID: ${actualError.requestId}`] : []),
+          ] : []),
+          'Try removing any attachments and resending',
+          'Check if images are in a supported format (PNG, JPEG, GIF, WebP)',
+        ],
         actions: [
           { key: 'r', label: 'Retry', action: 'retry' },
         ],
@@ -2410,8 +2538,16 @@ Please continue the conversation naturally from where we left off.
       'unknown': {
         code: 'unknown_error',
         title: 'Unknown Error',
-        message: 'An unexpected error occurred while connecting to Anthropic.',
-        details: ['This may be a temporary issue', 'Check your network connection'],
+        message: 'An unexpected error occurred.',
+        details: [
+          ...(actualError ? [
+            `Error: ${actualError.message}`,
+            `Type: ${actualError.errorType}`,
+            ...(actualError.requestId ? [`Request ID: ${actualError.requestId}`] : []),
+          ] : []),
+          'This may be a temporary issue',
+          'Check your network connection',
+        ],
         actions: [
           { key: 'r', label: 'Retry', action: 'retry' },
         ],
@@ -2427,15 +2563,16 @@ Please continue the conversation naturally from where we left off.
     };
   }
 
-  private convertSDKMessage(
+  private async convertSDKMessage(
     message: SDKMessage,
     toolIndex: ToolIndex,
     emittedToolStarts: Set<string>,
+    activeParentTools: Set<string>,
     pendingText: string | null,
     setPendingText: (text: string | null) => void,
     turnId: string | null,
     setTurnId: (id: string | null) => void
-  ): AgentEvent[] {
+  ): Promise<AgentEvent[]> {
     const events: AgentEvent[] = [];
 
     // Debug: log all SDK message types to understand MCP tool result flow
@@ -2451,7 +2588,9 @@ Please continue the conversation naturally from where we left off.
         // Check for SDK-level errors FIRST (auth, network, rate limits, etc.)
         // These errors are set by the SDK when API calls fail
         if ('error' in message && message.error) {
-          const errorEvent = this.mapSDKErrorToTypedError(message.error);
+          // Extract actual API error from SDK debug log for better error details
+          // Uses async to allow retry with delays for race condition handling
+          const errorEvent = await this.mapSDKErrorToTypedError(message.error);
           events.push(errorEvent);
           // Don't process content blocks when there's an error
           break;
@@ -2500,7 +2639,8 @@ Please continue the conversation naturally from where we left off.
           }
         }
 
-        // Stateless tool start extraction — uses SDK's parent_tool_use_id directly
+        // Stateless tool start extraction — uses SDK's parent_tool_use_id directly.
+        // Falls back to activeParentTools when SDK doesn't provide parent info.
         const sdkParentId = message.parent_tool_use_id;
         const toolStartEvents = extractToolStarts(
           content as ContentBlock[],
@@ -2508,7 +2648,19 @@ Please continue the conversation naturally from where we left off.
           toolIndex,
           emittedToolStarts,
           turnId || undefined,
+          activeParentTools,
         );
+
+        // Track active Task tools for fallback parent assignment.
+        // When a Task tool starts, add it to the active set.
+        // This enables fallback parent assignment for child tools when SDK's
+        // parent_tool_use_id is null.
+        for (const event of toolStartEvents) {
+          if (event.type === 'tool_start' && event.toolName === 'Task') {
+            activeParentTools.add(event.toolUseId);
+          }
+        }
+
         events.push(...toolStartEvents);
 
         if (textContent) {
@@ -2551,6 +2703,7 @@ Please continue the conversation naturally from where we left off.
         } else if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
           // Stateless tool start extraction from stream events.
           // SDK's parent_tool_use_id is authoritative for parent assignment.
+          // Falls back to activeParentTools when SDK doesn't provide parent info.
           // Stream events arrive with empty input — the full input comes later
           // in the assistant message (extractToolStarts handles dedup + re-emit).
           const toolBlock = event.content_block;
@@ -2567,7 +2720,16 @@ Please continue the conversation naturally from where we left off.
             toolIndex,
             emittedToolStarts,
             turnId || undefined,
+            activeParentTools,
           );
+
+          // Track active Task tools for fallback parent assignment
+          for (const evt of streamEvents) {
+            if (evt.type === 'tool_start' && evt.toolName === 'Task') {
+              activeParentTools.add(evt.toolUseId);
+            }
+          }
+
           events.push(...streamEvents);
         }
         break;
@@ -2604,6 +2766,16 @@ Please continue the conversation naturally from where we left off.
             toolIndex,
             turnId || undefined,
           );
+
+          // Remove completed Task tools from activeParentTools.
+          // When a Task tool result arrives, we no longer need to track it
+          // as an active parent for fallback assignment.
+          for (const event of resultEvents) {
+            if (event.type === 'tool_result' && event.toolName === 'Task') {
+              activeParentTools.delete(event.toolUseId);
+            }
+          }
+
           events.push(...resultEvents);
         }
         break;
@@ -2646,7 +2818,16 @@ Please continue the conversation naturally from where we left off.
             toolIndex,
             emittedToolStarts,
             turnId || undefined,
+            activeParentTools,
           );
+
+          // Track active Task tools discovered via progress events
+          for (const evt of progressEvents) {
+            if (evt.type === 'tool_start' && evt.toolName === 'Task') {
+              activeParentTools.add(evt.toolUseId);
+            }
+          }
+
           events.push(...progressEvents);
         }
         break;

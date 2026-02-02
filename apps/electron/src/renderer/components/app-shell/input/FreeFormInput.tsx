@@ -183,6 +183,8 @@ export interface FreeFormInputProps {
     /** Model's context window size in tokens */
     contextWindow?: number
   }
+  /** Enable compact mode - hides attach, sources, working directory for popover embedding */
+  compactMode?: boolean
 }
 
 /**
@@ -232,6 +234,7 @@ export function FreeFormInput({
   disableSend = false,
   isEmptySession = false,
   contextStatus,
+  compactMode = false,
 }: FreeFormInputProps) {
   // Read custom model and workspace info from context.
   // Uses optional variant so playground (no provider) doesn't crash.
@@ -257,6 +260,12 @@ export function FreeFormInput({
   // Sync TO parent on blur/submit (debounced persistence)
   const [input, setInput] = React.useState(inputValue ?? '')
   const [attachments, setAttachments] = React.useState<FileAttachment[]>([])
+
+  // Ref to track current attachments for use in event handlers (avoids stale closure issues)
+  const attachmentsRef = React.useRef<FileAttachment[]>([])
+  React.useEffect(() => {
+    attachmentsRef.current = attachments
+  }, [attachments])
 
   // Optimistic state for source selection - updates UI immediately before IPC round-trip completes
   const [optimisticSourceSlugs, setOptimisticSourceSlugs] = React.useState(enabledSourceSlugs)
@@ -319,6 +328,31 @@ export function FreeFormInput({
   const [isFocused, setIsFocused] = React.useState(false)
   const [inputMaxHeight, setInputMaxHeight] = React.useState(540)
   const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
+
+  // Input settings (loaded from config)
+  const [autoCapitalisation, setAutoCapitalisation] = React.useState(true)
+  const [sendMessageKey, setSendMessageKey] = React.useState<'enter' | 'cmd-enter'>('enter')
+  const [spellCheck, setSpellCheck] = React.useState(false)
+
+  // Load input settings on mount
+  React.useEffect(() => {
+    const loadInputSettings = async () => {
+      if (!window.electronAPI) return
+      try {
+        const [autoCapEnabled, sendKey, spellCheckEnabled] = await Promise.all([
+          window.electronAPI.getAutoCapitalisation(),
+          window.electronAPI.getSendMessageKey(),
+          window.electronAPI.getSpellCheck(),
+        ])
+        setAutoCapitalisation(autoCapEnabled)
+        setSendMessageKey(sendKey)
+        setSpellCheck(spellCheckEnabled)
+      } catch (error) {
+        console.error('Failed to load input settings:', error)
+      }
+    }
+    loadInputSettings()
+  }, [])
 
   // Double-Esc interrupt: show warning overlay on first Esc, interrupt on second
   const { showEscapeOverlay } = useEscapeInterrupt()
@@ -532,6 +566,22 @@ export function FreeFormInput({
     return () => window.removeEventListener('craft:focus-input', handleFocusInput)
   }, [richInputRef])
 
+  // Get the next available number for a pasted file prefix (e.g., pasted-image-1, pasted-image-2)
+  const getNextPastedNumber = (
+    prefix: 'image' | 'text' | 'file',
+    existingAttachments: FileAttachment[]
+  ): number => {
+    const pattern = new RegExp(`^pasted-${prefix}-(\\d+)\\.`)
+    let maxNum = 0
+    for (const att of existingAttachments) {
+      const match = att.name.match(pattern)
+      if (match) {
+        maxNum = Math.max(maxNum, parseInt(match[1], 10))
+      }
+    }
+    return maxNum + 1
+  }
+
   // Listen for craft:paste-files events (for global paste when input not focused)
   React.useEffect(() => {
     const handlePasteFiles = async (e: CustomEvent<{ files: File[] }>) => {
@@ -542,16 +592,19 @@ export function FreeFormInput({
 
       setLoadingCount(prev => prev + files.length)
 
-      for (const file of files) {
-        try {
-          // Generate a name for clipboard images
-          let fileName = file.name
-          if (!fileName || fileName === 'image.png' || fileName === 'image.jpg' || fileName === 'blob') {
-            const ext = file.type.split('/')[1] || 'png'
-            fileName = `pasted-image-${Date.now()}.${ext}`
-          }
+      // Pre-assign sequential names using ref to avoid race conditions
+      let nextImageNum = getNextPastedNumber('image', attachmentsRef.current)
+      const fileNames: string[] = files.map(file => {
+        if (!file.name || file.name === 'image.png' || file.name === 'image.jpg' || file.name === 'blob') {
+          const ext = file.type.split('/')[1] || 'png'
+          return `pasted-image-${nextImageNum++}.${ext}`
+        }
+        return file.name
+      })
 
-          const attachment = await readFileAsAttachment(file, fileName)
+      for (let i = 0; i < files.length; i++) {
+        try {
+          const attachment = await readFileAsAttachment(files[i], fileNames[i])
           if (attachment) {
             setAttachments(prev => [...prev, attachment])
           }
@@ -661,6 +714,7 @@ export function FreeFormInput({
   // "Add New Label" handler: cleans up the #trigger text and opens a controlled
   // EditPopover so the user can describe the label before the agent creates it.
   const [addLabelPopoverOpen, setAddLabelPopoverOpen] = React.useState(false)
+  const [addLabelPrefill, setAddLabelPrefill] = React.useState('')
   const handleAddLabel = React.useCallback((prefill: string) => {
     if (!workspaceRootPath) return
 
@@ -669,6 +723,10 @@ export function FreeFormInput({
     setInput(cleaned)
     syncToParent(cleaned)
     inlineLabel.close()
+
+    // Store the prefill text (e.g., "Test" from "#Test") to pre-fill the popover
+    // Format: "Add new label {prefill}" so user can just press enter or modify
+    setAddLabelPrefill(prefill ? `Add new label ${prefill}` : '')
 
     // Open the EditPopover for label creation
     setAddLabelPopoverOpen(true)
@@ -693,6 +751,17 @@ export function FreeFormInput({
     observer.observe(containerRef.current)
     return () => observer.disconnect()
   }, [onHeightChange])
+
+  // In compact mode, immediately report collapsed height when processing state changes
+  // This ensures smooth animation timing when input collapses/expands
+  React.useEffect(() => {
+    if (!onHeightChange || !compactMode) return
+    if (isProcessing) {
+      // Collapsed state - only bottom bar visible (~44px)
+      onHeightChange(44)
+    }
+    // When not processing, ResizeObserver will report the full height
+  }, [compactMode, isProcessing, onHeightChange])
 
   // Check if running in Electron environment (has electronAPI)
   const hasElectronAPI = typeof window !== 'undefined' && !!window.electronAPI
@@ -805,16 +874,19 @@ export function FreeFormInput({
     const files = Array.from(clipboardItems)
     setLoadingCount(prev => prev + files.length)
 
-    for (const file of files) {
-      try {
-        // Generate a name for clipboard images (they often have no meaningful name)
-        let fileName = file.name
-        if (!fileName || fileName === 'image.png' || fileName === 'image.jpg' || fileName === 'blob') {
-          const ext = file.type.split('/')[1] || 'png'
-          fileName = `pasted-image-${Date.now()}.${ext}`
-        }
+    // Pre-assign sequential names using ref to avoid race conditions
+    let nextImageNum = getNextPastedNumber('image', attachmentsRef.current)
+    const fileNames: string[] = files.map(file => {
+      if (!file.name || file.name === 'image.png' || file.name === 'image.jpg' || file.name === 'blob') {
+        const ext = file.type.split('/')[1] || 'png'
+        return `pasted-image-${nextImageNum++}.${ext}`
+      }
+      return file.name
+    })
 
-        const attachment = await readFileAsAttachment(file, fileName)
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const attachment = await readFileAsAttachment(files[i], fileNames[i])
         if (attachment) {
           setAttachments(prev => [...prev, attachment])
         }
@@ -827,8 +899,8 @@ export function FreeFormInput({
 
   // Handle long text paste - convert to file attachment
   const handleLongTextPaste = React.useCallback((text: string) => {
-    const timestamp = Date.now()
-    const fileName = `pasted-text-${timestamp}.txt`
+    const nextNum = getNextPastedNumber('text', attachmentsRef.current)
+    const fileName = `pasted-text-${nextNum}.txt`
     const attachment: FileAttachment = {
       type: 'text',
       path: fileName,
@@ -840,7 +912,7 @@ export function FreeFormInput({
     setAttachments(prev => [...prev, attachment])
     // Focus input after adding attachment
     richInputRef.current?.focus()
-  }, [])
+  }, []) // No deps needed - uses ref
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault()
@@ -985,15 +1057,28 @@ export function FreeFormInput({
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      // Submit message - backend handles interruption if processing
-      submitMessage()
-    }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault()
-      // Submit message - backend handles interruption if processing
-      submitMessage()
+    // Skip submission during IME composition - user is confirming composed characters, not sending
+    // Handle send key based on user preference:
+    // - 'enter': Enter sends (Shift+Enter for newline)
+    // - 'cmd-enter': ⌘/Ctrl+Enter sends (Enter for newline)
+    if (sendMessageKey === 'enter') {
+      // Enter sends, Shift+Enter adds newline
+      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+        e.preventDefault()
+        submitMessage()
+      }
+      // Also allow Cmd/Ctrl+Enter to send (power user shortcut)
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+        e.preventDefault()
+        submitMessage()
+      }
+    } else {
+      // cmd-enter mode: ⌘/Ctrl+Enter sends, plain Enter adds newline
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+        e.preventDefault()
+        submitMessage()
+      }
+      // Plain Enter is allowed to pass through (adds newline)
     }
     if (e.key === 'Escape') {
       // Skip blur if a popover/overlay is open — let the overlay handle ESC instead.
@@ -1044,11 +1129,14 @@ export function FreeFormInput({
     inlineLabel.handleInputChange(value, cursorPosition)
 
     // Auto-capitalize first letter (but not for slash commands, @mentions, or #labels)
+    // Only if autoCapitalisation setting is enabled
     let newValue = value
-    if (value.length > 0 && value.charAt(0) !== '/' && value.charAt(0) !== '@' && value.charAt(0) !== '#') {
+    if (autoCapitalisation && value.length > 0 && value.charAt(0) !== '/' && value.charAt(0) !== '@' && value.charAt(0) !== '#') {
       const capitalizedFirst = value.charAt(0).toUpperCase()
       if (capitalizedFirst !== value.charAt(0)) {
         newValue = capitalizedFirst + value.slice(1)
+        // Set cursor position BEFORE state update so it's used when useEffect syncs the value
+        richInputRef.current?.setSelectionRange(cursorPosition, cursorPosition)
         setInput(newValue)
         syncToParent(newValue)
         return
@@ -1059,14 +1147,12 @@ export function FreeFormInput({
     const typography = applySmartTypography(value, cursorPosition)
     if (typography.replaced) {
       newValue = typography.text
+      // Set cursor position BEFORE state update so it's used when useEffect syncs the value
+      richInputRef.current?.setSelectionRange(typography.cursor, typography.cursor)
       setInput(newValue)
       syncToParent(newValue)
-      // Restore cursor position after React re-render
-      requestAnimationFrame(() => {
-        richInputRef.current?.setSelectionRange(typography.cursor, typography.cursor)
-      })
     }
-  }, [inlineSlash, inlineMention, inlineLabel, syncToParent])
+  }, [inlineSlash, inlineMention, inlineLabel, syncToParent, autoCapitalisation])
 
   // Handle inline slash command selection (removes the /command text)
   const handleInlineSlashCommandSelect = React.useCallback((commandId: SlashCommandId) => {
@@ -1182,6 +1268,9 @@ export function FreeFormInput({
             context={addLabelEditConfig.context}
             example={addLabelEditConfig.example}
             overridePlaceholder={addLabelEditConfig.overridePlaceholder}
+            defaultValue={addLabelPrefill}
+            model={addLabelEditConfig.model}
+            systemPromptPreset={addLabelEditConfig.systemPromptPreset}
             secondaryAction={workspaceRootPath ? {
               label: 'Edit File',
               filePath: `${workspaceRootPath}/labels/config.json`,
@@ -1200,6 +1289,8 @@ export function FreeFormInput({
         />
 
         {/* Rich Text Input with inline mention badges */}
+        {/* In compact mode, hide input while processing (collapses to just bottom bar) */}
+        {!(compactMode && isProcessing) && (
         <RichTextInput
           ref={richInputRef}
           value={input}
@@ -1220,18 +1311,22 @@ export function FreeFormInput({
           skills={skills}
           sources={sources}
           workspaceId={workspaceId}
-          className="min-h-[88px] pl-5 pr-4 pt-4 pb-3 overflow-y-auto"
+          className="pl-5 pr-4 pt-4 pb-3 overflow-y-auto min-h-[88px]"
           style={{ maxHeight: inputMaxHeight }}
           data-tutorial="chat-input"
+          spellCheck={spellCheck}
         />
+        )}
 
         {/* Bottom Row: Controls - wrapped in relative container for escape overlay */}
         <div className="relative">
           {/* Escape interrupt overlay - shown on first Esc press during processing */}
           <EscapeInterruptOverlay isVisible={isProcessing && showEscapeOverlay} />
 
-          <div className="flex items-center gap-1 px-2 py-2 border-t border-border/50">
+          <div className={cn("flex items-center gap-1 px-2 py-2", !compactMode && "border-t border-border/50")}>
           {/* Left side: Context badges - shrinkable so model + send always stay visible */}
+          {/* Hidden in compact mode (EditPopover embedding) */}
+          {!compactMode && (
           <div className="flex items-center gap-1 min-w-32 shrink overflow-hidden">
           {/* 1. Attach Files Badge */}
           <FreeFormInputContextBadge
@@ -1421,13 +1516,15 @@ export function FreeFormInput({
             />
           )}
           </div>
+          )}
 
           {/* Spacer */}
           <div className="flex-1" />
 
           {/* Right side: Model + Send - never shrink so they're always visible */}
           <div className="flex items-center shrink-0">
-          {/* 5. Model Selector - Radix DropdownMenu for automatic positioning and submenu support */}
+          {/* 5. Model Selector - Hidden in compact mode (EditPopover embedding) */}
+          {!compactMode && (
           <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1551,6 +1648,7 @@ export function FreeFormInput({
               )}
             </StyledDropdownMenuContent>
           </DropdownMenu>
+          )}
 
           {/* 5.5 Context Usage Warning Badge - shows when approaching auto-compaction threshold */}
           {(() => {
