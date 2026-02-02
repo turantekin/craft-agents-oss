@@ -178,6 +178,16 @@ const api: ElectronAPI = {
   setOpenAIKey: (apiKey: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_OPENAI_KEY, apiKey),
   deleteOpenAIKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_DELETE_OPENAI_KEY),
 
+  // Settings - Perplexity (for web search delegation)
+  getPerplexityKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_PERPLEXITY_KEY),
+  setPerplexityKey: (apiKey: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_PERPLEXITY_KEY, apiKey),
+  deletePerplexityKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_DELETE_PERPLEXITY_KEY),
+
+  // Settings - Gemini (for large context analysis)
+  getGeminiKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_GEMINI_KEY),
+  setGeminiKey: (apiKey: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_GEMINI_KEY, apiKey),
+  deleteGeminiKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_DELETE_GEMINI_KEY),
+
   // Settings - Model (global default)
   getModel: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_MODEL),
   setModel: (model: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_MODEL, model),
@@ -286,6 +296,12 @@ const api: ElectronAPI = {
     ipcRenderer.invoke(IPC_CHANNELS.SKILLS_OPEN_EDITOR, workspaceId, skillSlug),
   openSkillInFinder: (workspaceId: string, skillSlug: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.SKILLS_OPEN_FINDER, workspaceId, skillSlug),
+  getSkillPreference: (workspaceId: string, skillSlug: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SKILLS_GET_PREFERENCE, workspaceId, skillSlug),
+  setSkillPreference: (workspaceId: string, skillSlug: string, updates: { autoSwitchMode?: boolean }) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SKILLS_SET_PREFERENCE, workspaceId, skillSlug, updates),
+  getAllSkillPreferences: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SKILLS_GET_ALL_PREFERENCES, workspaceId),
 
   // Skills change listener (live updates when skills are added/removed/modified)
   onSkillsChanged: (callback: (skills: import('@craft-agent/shared/skills').LoadedSkill[]) => void) => {
@@ -327,6 +343,12 @@ const api: ElectronAPI = {
       ipcRenderer.removeListener(IPC_CHANNELS.LABELS_CHANGED, handler)
     }
   },
+
+  // Label suggestions (AI-suggested labels pending acceptance)
+  acceptLabelSuggestion: (sessionId: string, suggestion: { labelId: string; value?: string; triggerMessageId: string; suggestedAt: number }) =>
+    ipcRenderer.invoke(IPC_CHANNELS.LABEL_SUGGESTION_ACCEPT, sessionId, suggestion),
+  dismissLabelSuggestion: (sessionId: string, labelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.LABEL_SUGGESTION_DISMISS, sessionId, labelId),
 
   // Views (dynamic, expression-based filters stored in views.json)
   listViews: (workspaceId: string) =>

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with the Craft Agents codebase.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Overview
 
@@ -17,8 +17,17 @@ bun run electron:start        # Build and run
 bun run typecheck             # Check packages/shared
 bun run typecheck:all         # Check all packages
 
+# Linting
+bun run lint:electron         # Lint electron app
+
 # Testing
-bun test                      # Run tests
+bun test                      # Run all tests
+bun test path/to/file.test.ts # Run a single test file
+bun test --watch              # Run tests in watch mode
+
+# Utilities
+bun run fresh-start           # Reset to fresh state (clears ~/.craft-agent/)
+bun run print:system-prompt   # Print the agent system prompt
 ```
 
 ## Project Structure
@@ -49,9 +58,12 @@ Core business logic. See `packages/shared/CLAUDE.md` for details.
 - **CraftAgent** (`src/agent/`): Wraps Claude Agent SDK, handles MCP connections, tool permissions
 - **Permission Modes**: `safe` (read-only), `ask` (prompt for approval), `allow-all` (auto-approve)
 - **Config** (`src/config/`): Storage, preferences, themes at `~/.craft-agent/`
-- **Credentials** (`src/credentials/`): AES-256-GCM encrypted storage
+- **Credentials** (`src/credentials/`): AES-256-GCM encrypted storage for API keys (Anthropic, OpenAI, Perplexity, Gemini)
 - **Sessions** (`src/sessions/`): Persistence with debounced writes
 - **Sources** (`src/sources/`): MCP servers, REST APIs, local filesystems
+- **Labels** (`src/labels/`): Session tagging with regex auto-rules and AI classification
+- **Skills** (`src/skills/`): Markdown-based workflows with metadata, preferences, and required permission modes
+- **Delegation Tools** (`src/agent/delegation-tools.ts`): Global MCP tools to delegate tasks to Perplexity (web search), Gemini (large context), and OpenAI (reasoning)
 
 ### `@craft-agent/core` (packages/core)
 Type definitions only. See `packages/core/CLAUDE.md` for details.
@@ -90,15 +102,84 @@ import type { Session, Message } from '@craft-agent/core';
 ### Configuration Storage
 All config at `~/.craft-agent/`:
 - `config.json` - Main config (workspaces, auth)
-- `credentials.enc` - Encrypted credentials
-- `workspaces/{id}/` - Per-workspace data (sessions, sources, skills, statuses)
+- `credentials.enc` - Encrypted credentials (API keys for Anthropic, OpenAI, Perplexity, Gemini)
+- `workspaces/{id}/` - Per-workspace data:
+  - `sessions/` - Session files
+  - `sources/` - MCP server configs
+  - `skills/` - Skill markdown files
+  - `skill-preferences.json` - Per-skill user preferences (e.g., autoSwitchMode)
+  - `statuses/` - Status definitions
+  - `labels/config.json` - Label tree with auto-rules and AI classification
 
 ### MCP Auth Separation
 **Critical**: Craft OAuth (`craft_oauth::global`) is ONLY for Craft API. Each MCP server has its own OAuth via `workspace_oauth::{workspaceId}`.
 
+### Large Response Handling
+Tool responses exceeding ~60KB are automatically summarized using Claude Haiku with intent-aware context. The `_intent` field is injected into MCP tool schemas to preserve summarization focus.
+
 ### Session-Scoped State
 - Permission modes are per-session, not global
 - Each session has unique ID and maps 1:1 with SDK session
+
+### Deep Linking
+External apps can navigate using `craftagents://` URLs:
+- `craftagents://allChats` - All chats view
+- `craftagents://allChats/chat/{sessionId}` - Specific chat
+- `craftagents://settings` - Settings
+- `craftagents://action/new-chat` - Create new chat
+
+### Local MCP Server Security
+When spawning local MCP servers (stdio transport), sensitive env vars are filtered out:
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `AWS_*`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, etc.
+To explicitly pass an env var to a specific MCP server, use the `env` field in source config.
+
+### Labels and Auto-Labeling
+Labels are hierarchical tags applied to sessions. Two auto-labeling mechanisms:
+
+1. **Regex Rules** (`autoRules`): Pattern-based matching with regex on user messages
+   - Supports value extraction with capture groups
+   - Immediate application on match
+
+2. **AI Classification** (`aiClassification`): Semantic matching using Claude Haiku
+   - `description`: Human-readable criteria for when label applies
+   - `mode`: `'suggest'` (pending user acceptance) or `'auto'` (immediate)
+   - `valueHint`: Guidance for extracting values on typed labels
+   - Single API call evaluates all AI-enabled labels together
+
+```typescript
+// Label with both regex and AI classification
+{
+  id: 'bug',
+  name: 'Bug Report',
+  autoRules: [{ pattern: '\\b(bug|error|crash)\\b', flags: 'i' }],
+  aiClassification: {
+    description: 'Conversations about debugging or fixing code errors',
+    mode: 'suggest'
+  }
+}
+```
+
+### Delegation Tools
+Global MCP tools that delegate to external AI services:
+
+| Tool | Service | Use Case |
+|------|---------|----------|
+| `perplexity_search` | Perplexity AI | Real-time web search with citations |
+| `gemini_analyze` | Google Gemini | Large context analysis (1M+ tokens) |
+| `openai_analyze` | OpenAI | Advanced reasoning (o3, o4-mini, gpt-4.1) |
+
+API keys configured in Settings > App > Integrations.
+
+### Skills with Required Modes
+Skills can specify a `requiredMode` in their frontmatter:
+```yaml
+---
+name: Deploy to Production
+requiredMode: allow-all
+---
+```
+When invoked, the session's permission mode switches to the required mode.
+Users can enable/disable auto-switching per skill via `skill-preferences.json`.
 
 ## Tech Stack
 
@@ -124,6 +205,13 @@ All config at `~/.craft-agent/`:
 - Debug logging enabled automatically in development
 - Use `debug()` from `@craft-agent/shared/utils`
 
+### Keyboard Shortcuts (in app)
+| Shortcut | Action |
+|----------|--------|
+| `Cmd+N` | New chat |
+| `Cmd+1/2/3` | Focus sidebar/list/chat |
+| `SHIFT+TAB` | Cycle permission modes |
+
 ### Environment Variables
 Create `.env` for OAuth integrations:
 ```bash
@@ -133,6 +221,13 @@ SLACK_OAUTH_CLIENT_ID=...
 SLACK_OAUTH_CLIENT_SECRET=...
 MICROSOFT_OAUTH_CLIENT_ID=...
 ```
+
+### API Keys (User-configured in Settings)
+These are stored encrypted in `credentials.enc`, not in `.env`:
+- **Anthropic API Key**: Primary Claude access (or OAuth for Max subscribers)
+- **OpenAI API Key**: Whisper voice transcription + delegation tool
+- **Perplexity API Key**: Web search delegation
+- **Gemini API Key**: Large context analysis delegation
 
 ## Guidelines
 

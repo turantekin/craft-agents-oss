@@ -1,9 +1,10 @@
 /**
  * LabelsSettingsPage
  *
- * Displays workspace label configuration in two data tables:
+ * Displays workspace label configuration in three data tables:
  * 1. Label Hierarchy - tree table with expand/collapse showing all labels
  * 2. Auto-Apply Rules - flat table showing all regex rules across labels
+ * 3. AI Classification - flat table showing AI classification settings across labels
  *
  * Each section has an Edit button that opens an EditPopover for AI-assisted editing
  * of the underlying labels/config.json file.
@@ -23,6 +24,7 @@ import { useLabels } from '@/hooks/useLabels'
 import {
   LabelsDataTable,
   AutoRulesDataTable,
+  AiClassificationDataTable,
 } from '@/components/info'
 import {
   SettingsSection,
@@ -45,6 +47,7 @@ export default function LabelsSettingsPage() {
   const rootPath = activeWorkspace?.rootPath || ''
   const labelsEditConfig = getEditConfig('edit-labels', rootPath)
   const autoRulesEditConfig = getEditConfig('edit-auto-rules', rootPath)
+  const aiClassificationEditConfig = getEditConfig('edit-ai-classification', rootPath)
 
   // Secondary action: open the labels config file directly in system editor
   const editFileAction = rootPath ? {
@@ -144,6 +147,30 @@ export default function LabelsSettingsPage() {
                         maxHeight={350}
                         fullscreen
                         fullscreenTitle="Auto-Apply Rules"
+                      />
+                    </SettingsCard>
+                  </SettingsSection>
+
+                  {/* AI Classification Section */}
+                  <SettingsSection
+                    title="AI Classification"
+                    description="Semantic auto-tagging using Claude Haiku. When enabled, AI analyzes user messages and suggests or auto-applies labels based on conversation intent — no regex patterns needed."
+                    action={
+                      <EditPopover
+                        trigger={<EditButton />}
+                        context={aiClassificationEditConfig.context}
+                        example={aiClassificationEditConfig.example}
+                        secondaryAction={editFileAction}
+                      />
+                    }
+                  >
+                    <SettingsCard className="p-0">
+                      <AiClassificationDataTable
+                        data={labels}
+                        searchable
+                        maxHeight={350}
+                        fullscreen
+                        fullscreenTitle="AI Classification"
                       />
                     </SettingsCard>
                   </SettingsSection>

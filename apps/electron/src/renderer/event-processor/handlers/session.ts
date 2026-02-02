@@ -13,6 +13,7 @@ import type {
   TypedErrorEvent,
   SourcesChangedEvent,
   LabelsChangedEvent,
+  LabelSuggestionsEvent,
   TodoStateChangedEvent,
   SessionFlaggedEvent,
   SessionUnflaggedEvent,
@@ -517,6 +518,27 @@ export function handleLabelsChanged(
       session: {
         ...session,
         labels: event.labels,
+      },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle label_suggestions - AI suggested labels pending user acceptance
+ */
+export function handleLabelSuggestions(
+  state: SessionState,
+  event: LabelSuggestionsEvent
+): ProcessResult {
+  const { session, streaming } = state
+
+  return {
+    state: {
+      session: {
+        ...session,
+        labelSuggestions: event.suggestions,
       },
       streaming,
     },

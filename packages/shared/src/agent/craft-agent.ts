@@ -24,6 +24,7 @@ import {
   cleanupSessionScopedTools,
   type AuthRequest,
 } from './session-scoped-tools.ts';
+import { getDelegationToolsServer } from './delegation-tools.ts';
 import {
   getPermissionMode,
   setPermissionMode,
@@ -821,6 +822,8 @@ export class CraftAgent {
         preferences: getPreferencesServer(false),
         // Session-scoped tools (SubmitPlan, source_test, etc.)
         session: getSessionScopedTools(sessionId, this.workspaceRootPath),
+        // Delegation tools (Perplexity search, Gemini analysis) - always available
+        delegation: getDelegationToolsServer(),
         // Craft Agents documentation - always available for searching setup guides
         // This is a public Mintlify MCP server, no auth needed
         'craft-agents-docs': {
@@ -1004,8 +1007,9 @@ export class CraftAgent {
                   // Built-in MCP servers that are always available (not user sources)
                   // - preferences: user preferences storage
                   // - session: session-scoped tools (SubmitPlan, source_test, etc.)
+                  // - delegation: delegation tools (Perplexity search, Gemini analysis)
                   // - craft-agents-docs: always-available documentation search
-                  const builtInMcpServers = new Set(['preferences', 'session', 'craft-agents-docs']);
+                  const builtInMcpServers = new Set(['preferences', 'session', 'delegation', 'craft-agents-docs']);
 
                   // Check if this is a source server (not built-in)
                   if (!builtInMcpServers.has(serverName)) {

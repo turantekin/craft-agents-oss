@@ -69,6 +69,7 @@ export type EditContextKey =
   | 'edit-statuses'
   | 'edit-labels'
   | 'edit-auto-rules'
+  | 'edit-ai-classification'
   | 'add-label'
   | 'edit-views'
   | 'edit-tool-icons'
@@ -361,6 +362,24 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
         'Confirm clearly when done.',
     },
     example: 'Add a rule to detect GitHub issue URLs',
+  }),
+
+  // AI classification settings context (semantic auto-tagging using Claude Haiku)
+  'edit-ai-classification': (location) => ({
+    context: {
+      label: 'AI Classification',
+      filePath: `${location}/labels/config.json`,
+      context:
+        'The user wants to configure AI-based label classification (semantic auto-tagging using Claude Haiku). ' +
+        'AI classification settings live inside the aiClassification object on individual labels in labels/config.json. ' +
+        'aiClassification has: description (required, explains when label should apply), mode (optional: "suggest" or "auto", default "suggest"), ' +
+        'valueHint (optional, for typed labels - guides value extraction). ' +
+        '"suggest" mode shows suggestions with accept/dismiss buttons. "auto" mode applies labels immediately like regex rules. ' +
+        'Examples: { "aiClassification": { "description": "Conversations about debugging or fixing errors", "mode": "suggest" } } ' +
+        'For typed labels with values: { "aiClassification": { "description": "Urgent tasks", "mode": "auto", "valueHint": "Extract priority 1-5" } } ' +
+        'Confirm clearly when done.',
+    },
+    example: 'Enable AI classification for the Bug label',
   }),
 
   // Add new label context (triggered from the # menu when no labels match)

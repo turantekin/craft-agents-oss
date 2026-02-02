@@ -11,6 +11,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'fs';
 import { join } from 'path';
 import matter from 'gray-matter';
@@ -44,6 +45,13 @@ function parseSkillFile(content: string): { metadata: SkillMetadata; body: strin
     // Only accepts emoji or URL - rejects inline SVG and relative paths
     const icon = validateIconValue(parsed.data.icon, 'Skills');
 
+    // Validate requiredMode if present
+    const requiredMode = parsed.data.requiredMode as string | undefined;
+    const validModes = ['safe', 'ask', 'allow-all'];
+    const validatedRequiredMode = requiredMode && validModes.includes(requiredMode)
+      ? requiredMode as 'safe' | 'ask' | 'allow-all'
+      : undefined;
+
     return {
       metadata: {
         name: parsed.data.name as string,
@@ -51,6 +59,7 @@ function parseSkillFile(content: string): { metadata: SkillMetadata; body: strin
         globs: parsed.data.globs as string[] | undefined,
         alwaysAllow: parsed.data.alwaysAllow as string[] | undefined,
         icon,
+        requiredMode: validatedRequiredMode,
       },
       body: parsed.content,
     };
@@ -242,3 +251,107 @@ export function skillNeedsIconDownload(skill: LoadedSkill): boolean {
 
 // Re-export icon utilities for convenience
 export { isIconUrl } from '../utils/icon.ts';
+
+// ============================================================
+// Skill Preferences (per-workspace user settings for skills)
+// ============================================================
+
+/**
+ * User preferences for a specific skill
+ */
+export interface SkillPreference {
+  /** Whether to auto-switch permission mode when this skill is invoked */
+  autoSwitchMode?: boolean;
+}
+
+/**
+ * Map of skill slug to preferences
+ */
+export interface SkillPreferences {
+  [slug: string]: SkillPreference;
+}
+
+const SKILL_PREFERENCES_FILE = 'skill-preferences.json';
+
+/**
+ * Get path to skill preferences file for a workspace
+ */
+function getSkillPreferencesPath(workspaceRoot: string): string {
+  return join(workspaceRoot, SKILL_PREFERENCES_FILE);
+}
+
+/**
+ * Load skill preferences for a workspace
+ * @param workspaceRoot - Absolute path to workspace root
+ */
+export function loadSkillPreferences(workspaceRoot: string): SkillPreferences {
+  const prefsPath = getSkillPreferencesPath(workspaceRoot);
+
+  try {
+    if (!existsSync(prefsPath)) {
+      return {};
+    }
+    const content = readFileSync(prefsPath, 'utf-8');
+    return JSON.parse(content) as SkillPreferences;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Save skill preferences for a workspace
+ * @param workspaceRoot - Absolute path to workspace root
+ * @param prefs - Skill preferences to save
+ */
+export function saveSkillPreferences(workspaceRoot: string, prefs: SkillPreferences): void {
+  const prefsPath = getSkillPreferencesPath(workspaceRoot);
+
+  try {
+    writeFileSync(prefsPath, JSON.stringify(prefs, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save skill preferences:', error);
+  }
+}
+
+/**
+ * Get preference for a specific skill
+ * @param workspaceRoot - Absolute path to workspace root
+ * @param slug - Skill slug
+ */
+export function getSkillPreference(workspaceRoot: string, slug: string): SkillPreference {
+  const prefs = loadSkillPreferences(workspaceRoot);
+  return prefs[slug] ?? {};
+}
+
+/**
+ * Update preference for a specific skill
+ * @param workspaceRoot - Absolute path to workspace root
+ * @param slug - Skill slug
+ * @param updates - Preference updates
+ */
+export function updateSkillPreference(
+  workspaceRoot: string,
+  slug: string,
+  updates: Partial<SkillPreference>
+): SkillPreference {
+  const prefs = loadSkillPreferences(workspaceRoot);
+  const current = prefs[slug] ?? {};
+  const updated = { ...current, ...updates };
+
+  // Remove undefined values
+  Object.keys(updated).forEach((key) => {
+    if (updated[key as keyof SkillPreference] === undefined) {
+      delete updated[key as keyof SkillPreference];
+    }
+  });
+
+  // If no preferences left, remove the skill entry
+  if (Object.keys(updated).length === 0) {
+    delete prefs[slug];
+  } else {
+    prefs[slug] = updated;
+  }
+
+  saveSkillPreferences(workspaceRoot, prefs);
+  return updated;
+}

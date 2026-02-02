@@ -49,9 +49,10 @@ import { loadWorkspaceSkills, type LoadedSkill } from '@craft-agent/shared/skill
 import type { ToolDisplayMeta } from '@craft-agent/core/types'
 import { DEFAULT_MODEL, getToolIconsDir } from '@craft-agent/shared/config'
 import { type ThinkingLevel, DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
-import { evaluateAutoLabels } from '@craft-agent/shared/labels/auto'
+import { evaluateAutoLabels, evaluateAiLabels, collectAiClassificationLabels, type LabelSuggestion } from '@craft-agent/shared/labels/auto'
 import { listLabels } from '@craft-agent/shared/labels/storage'
 import { extractLabelId } from '@craft-agent/shared/labels'
+import type { LabelConfig } from '@craft-agent/shared/labels/types'
 
 /**
  * Sanitize message content for use as session title.
@@ -310,6 +311,8 @@ interface ManagedSession {
   enabledSourceSlugs?: string[]
   // Labels applied to this session (additive tags, many-per-session)
   labels?: string[]
+  // AI-suggested labels pending user acceptance
+  labelSuggestions?: LabelSuggestion[]
   // Working directory for this session (used by agent for bash commands)
   workingDirectory?: string
   // SDK cwd for session storage - set once at creation, never changes.
@@ -2456,6 +2459,8 @@ export class SessionManager {
     // then merges any new matches into the session's label array.
     try {
       const labelTree = listLabels(managed.workspace.rootPath)
+
+      // Regex evaluation (sync, immediate)
       const autoMatches = evaluateAutoLabels(message, labelTree)
 
       if (autoMatches.length > 0) {
@@ -2474,6 +2479,12 @@ export class SessionManager {
           }, managed.workspace.id)
         }
       }
+
+      // AI evaluation (async, non-blocking) - fire-and-forget
+      // Uses the most recent user message for classification
+      const lastUserMessage = managed.messages.findLast(m => m.role === 'user')
+      const messageId = lastUserMessage?.id ?? generateMessageId()
+      this.evaluateAiLabelsAsync(managed, message, messageId, labelTree)
     } catch (e) {
       sessionLog.warn(`Auto-label evaluation failed for session ${sessionId}:`, e)
     }
@@ -3033,6 +3044,142 @@ To view this task's output:
       }, managed.workspace.id)
       // Persist to disk
       this.persistSession(managed)
+    }
+  }
+
+  /**
+   * Accept a label suggestion - adds it to session labels and removes from suggestions.
+   */
+  acceptLabelSuggestion(sessionId: string, suggestion: LabelSuggestion): void {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return
+
+    // Build the label entry string
+    const entry = suggestion.value
+      ? `${suggestion.labelId}::${suggestion.value}`
+      : suggestion.labelId
+
+    // Add to labels if not already present
+    const existingLabels = managed.labels ?? []
+    if (!existingLabels.includes(entry)) {
+      managed.labels = [...existingLabels, entry]
+      this.sendEvent({
+        type: 'labels_changed',
+        sessionId: managed.id,
+        labels: managed.labels,
+      }, managed.workspace.id)
+    }
+
+    // Remove from suggestions
+    managed.labelSuggestions = (managed.labelSuggestions ?? [])
+      .filter(s => s.labelId !== suggestion.labelId)
+
+    this.persistSession(managed)
+  }
+
+  /**
+   * Dismiss a label suggestion - removes it from suggestions without adding to labels.
+   */
+  dismissLabelSuggestion(sessionId: string, labelId: string): void {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return
+
+    managed.labelSuggestions = (managed.labelSuggestions ?? [])
+      .filter(s => s.labelId !== labelId)
+
+    this.persistSession(managed)
+  }
+
+  /**
+   * Async AI label evaluation (non-blocking).
+   * Evaluates labels with aiClassification config against the user message.
+   * For 'auto' mode: applies labels immediately.
+   * For 'suggest' mode: sends suggestions to UI for user acceptance.
+   */
+  private async evaluateAiLabelsAsync(
+    managed: ManagedSession,
+    message: string,
+    messageId: string,
+    labelTree: LabelConfig[]
+  ): Promise<void> {
+    try {
+      // Check if any labels have AI classification enabled
+      const aiLabels = collectAiClassificationLabels(labelTree)
+      if (aiLabels.length === 0) return
+
+      // Run AI evaluation
+      const aiMatches = await evaluateAiLabels(message, labelTree)
+      if (aiMatches.length === 0) return
+
+      // Build lookup map for AI-enabled labels
+      const labelMap = new Map(aiLabels.map(l => [l.id, l]))
+
+      const autoApply: string[] = []
+      const suggestions: LabelSuggestion[] = []
+
+      for (const match of aiMatches) {
+        const label = labelMap.get(match.labelId)
+        if (!label) continue
+
+        const mode = label.aiClassification?.mode ?? 'suggest'
+        const entry = match.value ? `${match.labelId}::${match.value}` : match.labelId
+
+        if (mode === 'auto') {
+          autoApply.push(entry)
+        } else {
+          suggestions.push({
+            labelId: match.labelId,
+            value: match.value || undefined,
+            triggerMessageId: messageId,
+            suggestedAt: Date.now(),
+          })
+        }
+      }
+
+      // Apply auto-mode matches
+      if (autoApply.length > 0) {
+        const existingLabels = managed.labels ?? []
+        const newEntries = autoApply.filter(e => !existingLabels.includes(e))
+
+        if (newEntries.length > 0) {
+          managed.labels = [...existingLabels, ...newEntries]
+          this.persistSession(managed)
+          this.sendEvent({
+            type: 'labels_changed',
+            sessionId: managed.id,
+            labels: managed.labels,
+          }, managed.workspace.id)
+        }
+      }
+
+      // Send suggestions to UI (filter out already-applied labels)
+      if (suggestions.length > 0) {
+        const existingLabelIds = new Set(
+          (managed.labels ?? []).map(l => extractLabelId(l))
+        )
+        const existingSuggestionIds = new Set(
+          (managed.labelSuggestions ?? []).map(s => s.labelId)
+        )
+
+        const newSuggestions = suggestions.filter(
+          s => !existingLabelIds.has(s.labelId) && !existingSuggestionIds.has(s.labelId)
+        )
+
+        if (newSuggestions.length > 0) {
+          managed.labelSuggestions = [
+            ...(managed.labelSuggestions ?? []),
+            ...newSuggestions,
+          ]
+
+          this.sendEvent({
+            type: 'label_suggestions',
+            sessionId: managed.id,
+            suggestions: managed.labelSuggestions,
+          }, managed.workspace.id)
+        }
+      }
+    } catch (e) {
+      sessionLog.debug(`AI label evaluation failed for session ${managed.id}:`, e)
     }
   }
 

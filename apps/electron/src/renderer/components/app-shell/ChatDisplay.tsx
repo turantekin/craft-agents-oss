@@ -946,6 +946,13 @@ export function ChatDisplay({
                 const newLabels = (session.labels || []).filter(id => id !== labelId)
                 onLabelsChange?.(newLabels)
               }}
+              labelSuggestions={session.labelSuggestions}
+              onSuggestionAccept={(suggestion) => {
+                window.electronAPI?.acceptLabelSuggestion(session.id, suggestion)
+              }}
+              onSuggestionDismiss={(labelId) => {
+                window.electronAPI?.dismissLabelSuggestion(session.id, labelId)
+              }}
               autoOpenLabelId={autoOpenLabelId}
               onAutoOpenConsumed={() => setAutoOpenLabelId(null)}
               todoStates={todoStates}

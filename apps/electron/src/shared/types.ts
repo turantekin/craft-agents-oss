@@ -19,6 +19,10 @@ import type { PermissionMode } from '@craft-agent/shared/agent/modes';
 export type { PermissionMode };
 export { PERMISSION_MODE_CONFIG } from '@craft-agent/shared/agent/modes';
 
+// Import label suggestion type for AI auto-labeling
+import type { LabelSuggestion } from '@craft-agent/shared/labels/auto';
+export type { LabelSuggestion };
+
 // Import thinking level types
 import type { ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels';
 export type { ThinkingLevel };
@@ -289,6 +293,8 @@ export interface Session {
   todoState?: TodoState
   // Labels (additive tags, many-per-session — bare IDs or "id::value" entries)
   labels?: string[]
+  // AI-suggested labels pending user acceptance
+  labelSuggestions?: LabelSuggestion[]
   // Read/unread tracking - ID of last message user has read
   lastReadMessageId?: string
   /**
@@ -385,6 +391,8 @@ export type SessionEvent =
   // Source events
   | { type: 'sources_changed'; sessionId: string; enabledSourceSlugs: string[] }
   | { type: 'labels_changed'; sessionId: string; labels: string[] }
+  // AI label suggestions (pending user acceptance)
+  | { type: 'label_suggestions'; sessionId: string; suggestions: LabelSuggestion[] }
   // Background task/shell events
   | { type: 'task_backgrounded'; sessionId: string; toolUseId: string; taskId: string; intent?: string; turnId?: string }
   | { type: 'shell_backgrounded'; sessionId: string; toolUseId: string; shellId: string; intent?: string; command?: string; turnId?: string }
@@ -582,6 +590,16 @@ export const IPC_CHANNELS = {
   SETTINGS_SET_OPENAI_KEY: 'settings:setOpenAIKey',
   SETTINGS_DELETE_OPENAI_KEY: 'settings:deleteOpenAIKey',
 
+  // Settings - Perplexity (for web search delegation)
+  SETTINGS_GET_PERPLEXITY_KEY: 'settings:getPerplexityKey',
+  SETTINGS_SET_PERPLEXITY_KEY: 'settings:setPerplexityKey',
+  SETTINGS_DELETE_PERPLEXITY_KEY: 'settings:deletePerplexityKey',
+
+  // Settings - Gemini (for large context analysis)
+  SETTINGS_GET_GEMINI_KEY: 'settings:getGeminiKey',
+  SETTINGS_SET_GEMINI_KEY: 'settings:setGeminiKey',
+  SETTINGS_DELETE_GEMINI_KEY: 'settings:deleteGeminiKey',
+
   // Settings - Model
   SETTINGS_GET_MODEL: 'settings:getModel',
   SETTINGS_SET_MODEL: 'settings:setModel',
@@ -627,6 +645,9 @@ export const IPC_CHANNELS = {
   SKILLS_OPEN_EDITOR: 'skills:openEditor',
   SKILLS_OPEN_FINDER: 'skills:openFinder',
   SKILLS_CHANGED: 'skills:changed',
+  SKILLS_GET_PREFERENCE: 'skills:getPreference',
+  SKILLS_SET_PREFERENCE: 'skills:setPreference',
+  SKILLS_GET_ALL_PREFERENCES: 'skills:getAllPreferences',
 
   // Status management (workspace-scoped)
   STATUSES_LIST: 'statuses:list',
@@ -638,6 +659,10 @@ export const IPC_CHANNELS = {
   LABELS_CREATE: 'labels:create',
   LABELS_DELETE: 'labels:delete',
   LABELS_CHANGED: 'labels:changed',  // Broadcast event
+
+  // Label suggestion management (session-scoped)
+  LABEL_SUGGESTION_ACCEPT: 'labelSuggestion:accept',
+  LABEL_SUGGESTION_DISMISS: 'labelSuggestion:dismiss',
 
   // Views management (workspace-scoped, stored in views.json)
   VIEWS_LIST: 'views:list',
@@ -840,6 +865,16 @@ export interface ElectronAPI {
   setOpenAIKey(apiKey: string): Promise<void>
   deleteOpenAIKey(): Promise<void>
 
+  // Settings - Perplexity (for web search delegation)
+  getPerplexityKey(): Promise<string | null>
+  setPerplexityKey(apiKey: string): Promise<void>
+  deletePerplexityKey(): Promise<void>
+
+  // Settings - Gemini (for large context analysis)
+  getGeminiKey(): Promise<string | null>
+  setGeminiKey(apiKey: string): Promise<void>
+  deleteGeminiKey(): Promise<void>
+
   // Settings - Model (global default)
   getModel(): Promise<string | null>
   setModel(model: string): Promise<void>
@@ -895,6 +930,9 @@ export interface ElectronAPI {
   deleteSkill(workspaceId: string, skillSlug: string): Promise<void>
   openSkillInEditor(workspaceId: string, skillSlug: string): Promise<void>
   openSkillInFinder(workspaceId: string, skillSlug: string): Promise<void>
+  getSkillPreference(workspaceId: string, skillSlug: string): Promise<import('@craft-agent/shared/skills').SkillPreference>
+  setSkillPreference(workspaceId: string, skillSlug: string, updates: { autoSwitchMode?: boolean }): Promise<import('@craft-agent/shared/skills').SkillPreference>
+  getAllSkillPreferences(workspaceId: string): Promise<import('@craft-agent/shared/skills').SkillPreferences>
 
   // Skills change listener (live updates when skills are added/removed/modified)
   onSkillsChanged(callback: (skills: LoadedSkill[]) => void): () => void
@@ -911,6 +949,10 @@ export interface ElectronAPI {
   deleteLabel(workspaceId: string, labelId: string): Promise<{ stripped: number }>
   // Labels change listener (live updates when labels config changes)
   onLabelsChanged(callback: (workspaceId: string) => void): () => void
+
+  // Label suggestions (AI-suggested labels pending acceptance)
+  acceptLabelSuggestion(sessionId: string, suggestion: LabelSuggestion): Promise<void>
+  dismissLabelSuggestion(sessionId: string, labelId: string): Promise<void>
 
   // Views (workspace-scoped, stored in views.json)
   listViews(workspaceId: string): Promise<import('@craft-agent/shared/views').ViewConfig[]>

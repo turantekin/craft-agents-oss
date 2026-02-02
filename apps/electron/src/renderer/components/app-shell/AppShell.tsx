@@ -80,7 +80,7 @@ import { useSetAtom } from "jotai"
 import type { Session, Workspace, FileAttachment, PermissionRequest, LoadedSource, LoadedSkill, PermissionMode, SourceFilter } from "../../../shared/types"
 import { sessionMetaMapAtom, type SessionMeta } from "@/atoms/sessions"
 import { sourcesAtom } from "@/atoms/sources"
-import { skillsAtom } from "@/atoms/skills"
+import { skillsAtom, skillPreferencesAtom } from "@/atoms/skills"
 import { type TodoStateId, type TodoState, statusConfigsToTodoStates } from "@/config/todo-states"
 import { useStatuses } from "@/hooks/useStatuses"
 import { useLabels } from "@/hooks/useLabels"
@@ -712,6 +712,7 @@ function AppShellContent({
   const [skills, setSkills] = React.useState<LoadedSkill[]>([])
   // Sync skills to atom for NavigationContext auto-selection
   const setSkillsAtom = useSetAtom(skillsAtom)
+  const setSkillPreferencesAtom = useSetAtom(skillPreferencesAtom)
   React.useEffect(() => {
     setSkillsAtom(skills)
   }, [skills, setSkillsAtom])
@@ -757,15 +758,22 @@ function AppShellContent({
     return cleanup
   }, [])
 
-  // Load skills from backend on mount
+  // Load skills and skill preferences from backend on mount
   React.useEffect(() => {
     if (!activeWorkspaceId) return
+    // Load skills
     window.electronAPI.getSkills(activeWorkspaceId).then((loaded) => {
       setSkills(loaded || [])
     }).catch(err => {
       console.error('[Chat] Failed to load skills:', err)
     })
-  }, [activeWorkspaceId])
+    // Load skill preferences (for auto-switch toggle)
+    window.electronAPI.getAllSkillPreferences(activeWorkspaceId).then((prefs) => {
+      setSkillPreferencesAtom(prefs || {})
+    }).catch(err => {
+      console.error('[Chat] Failed to load skill preferences:', err)
+    })
+  }, [activeWorkspaceId, setSkillPreferencesAtom])
 
   // Subscribe to live skill updates (when skills are added/removed dynamically)
   React.useEffect(() => {

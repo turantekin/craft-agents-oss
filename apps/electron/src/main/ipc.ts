@@ -1411,6 +1411,54 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   })
 
   // ============================================================
+  // Settings - Perplexity (for web search delegation)
+  // ============================================================
+
+  // Get Perplexity API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_PERPLEXITY_KEY, async (): Promise<string | null> => {
+    const manager = getCredentialManager()
+    return manager.getPerplexityApiKey()
+  })
+
+  // Set Perplexity API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_PERPLEXITY_KEY, async (_event, apiKey: string) => {
+    const manager = getCredentialManager()
+    await manager.setPerplexityApiKey(apiKey.trim())
+    ipcLog.info('[Settings] Perplexity API key saved')
+  })
+
+  // Delete Perplexity API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_DELETE_PERPLEXITY_KEY, async () => {
+    const manager = getCredentialManager()
+    await manager.deletePerplexityApiKey()
+    ipcLog.info('[Settings] Perplexity API key deleted')
+  })
+
+  // ============================================================
+  // Settings - Gemini (for large context analysis)
+  // ============================================================
+
+  // Get Gemini API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_GEMINI_KEY, async (): Promise<string | null> => {
+    const manager = getCredentialManager()
+    return manager.getGeminiApiKey()
+  })
+
+  // Set Gemini API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_GEMINI_KEY, async (_event, apiKey: string) => {
+    const manager = getCredentialManager()
+    await manager.setGeminiApiKey(apiKey.trim())
+    ipcLog.info('[Settings] Gemini API key saved')
+  })
+
+  // Delete Gemini API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_DELETE_GEMINI_KEY, async () => {
+    const manager = getCredentialManager()
+    await manager.deleteGeminiApiKey()
+    ipcLog.info('[Settings] Gemini API key deleted')
+  })
+
+  // ============================================================
   // Settings - Model (Global Default)
   // ============================================================
 
@@ -2094,6 +2142,33 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     await shell.showItemInFolder(skillDir)
   })
 
+  // Get preference for a specific skill
+  ipcMain.handle(IPC_CHANNELS.SKILLS_GET_PREFERENCE, async (_event, workspaceId: string, skillSlug: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { getSkillPreference } = await import('@craft-agent/shared/skills')
+    return getSkillPreference(workspace.rootPath, skillSlug)
+  })
+
+  // Set preference for a specific skill
+  ipcMain.handle(IPC_CHANNELS.SKILLS_SET_PREFERENCE, async (_event, workspaceId: string, skillSlug: string, updates: { autoSwitchMode?: boolean }) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { updateSkillPreference } = await import('@craft-agent/shared/skills')
+    return updateSkillPreference(workspace.rootPath, skillSlug, updates)
+  })
+
+  // Get all skill preferences for a workspace
+  ipcMain.handle(IPC_CHANNELS.SKILLS_GET_ALL_PREFERENCES, async (_event, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { loadSkillPreferences } = await import('@craft-agent/shared/skills')
+    return loadSkillPreferences(workspace.rootPath)
+  })
+
   // ============================================================
   // Status Management (Workspace-scoped)
   // ============================================================
@@ -2150,6 +2225,16 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     const result = deleteLabel(workspace.rootPath, labelId)
     windowManager.broadcastToAll(IPC_CHANNELS.LABELS_CHANGED, workspaceId)
     return result
+  })
+
+  // Accept a label suggestion (add to session labels)
+  ipcMain.handle(IPC_CHANNELS.LABEL_SUGGESTION_ACCEPT, async (_event, sessionId: string, suggestion: { labelId: string; value?: string; triggerMessageId: string; suggestedAt: number }) => {
+    sessionManager.acceptLabelSuggestion(sessionId, suggestion)
+  })
+
+  // Dismiss a label suggestion (remove without applying)
+  ipcMain.handle(IPC_CHANNELS.LABEL_SUGGESTION_DISMISS, async (_event, sessionId: string, labelId: string) => {
+    sessionManager.dismissLabelSuggestion(sessionId, labelId)
   })
 
   // List views for a workspace (dynamic expression-based filters stored in views.json)

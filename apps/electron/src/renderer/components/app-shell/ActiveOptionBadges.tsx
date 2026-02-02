@@ -8,7 +8,9 @@ import { ActiveTasksBar, type BackgroundTask } from './ActiveTasksBar'
 import { LabelIcon, LabelValueTypeIcon } from '@/components/ui/label-icon'
 import { LabelValuePopover } from '@/components/ui/label-value-popover'
 import type { LabelConfig } from '@craft-agent/shared/labels'
+import type { LabelSuggestion } from '@craft-agent/shared/labels/auto'
 import { flattenLabels, parseLabelEntry, formatLabelEntry } from '@craft-agent/shared/labels'
+import { LabelSuggestionBadge } from '@/components/ui/label-suggestion-badge'
 import { resolveEntityColor } from '@craft-agent/shared/colors'
 import { useTheme } from '@/context/ThemeContext'
 import { useDynamicStack } from '@/hooks/useDynamicStack'
@@ -62,6 +64,12 @@ export interface ActiveOptionBadgesProps {
   onRemoveLabel?: (labelId: string) => void
   /** Callback when session labels array changes (value edits or removals) */
   onLabelsChange?: (updatedLabels: string[]) => void
+  /** AI-suggested labels pending user acceptance */
+  labelSuggestions?: LabelSuggestion[]
+  /** Callback when user accepts an AI suggestion */
+  onSuggestionAccept?: (suggestion: LabelSuggestion) => void
+  /** Callback when user dismisses an AI suggestion */
+  onSuggestionDismiss?: (labelId: string) => void
   /** Label ID whose value popover should auto-open (set when a valued label is added via # menu) */
   autoOpenLabelId?: string | null
   /** Called after the auto-open has been consumed, so the parent can clear the signal */
@@ -97,6 +105,9 @@ export function ActiveOptionBadges({
   labels = [],
   onRemoveLabel,
   onLabelsChange,
+  labelSuggestions = [],
+  onSuggestionAccept,
+  onSuggestionDismiss,
   autoOpenLabelId,
   onAutoOpenConsumed,
   todoStates = [],
@@ -123,6 +134,20 @@ export function ActiveOptionBadges({
 
   const hasLabels = resolvedLabels.length > 0
 
+  // Resolve label suggestions to their configs for rendering
+  const resolvedSuggestions = React.useMemo(() => {
+    if (!labelSuggestions || labelSuggestions.length === 0 || labels.length === 0) return []
+    const flat = flattenLabels(labels)
+    return labelSuggestions
+      .map(suggestion => {
+        const config = flat.find(l => l.id === suggestion.labelId)
+        return config ? { suggestion, config } : null
+      })
+      .filter((item): item is { suggestion: LabelSuggestion; config: LabelConfig } => item !== null)
+  }, [labelSuggestions, labels])
+
+  const hasSuggestions = resolvedSuggestions.length > 0
+
   // Resolve the current state from todoStates for the badge display.
   // Every session always has a state — fall back to the default state (or 'todo')
   // when currentTodoState isn't explicitly set, matching SessionList's behavior.
@@ -130,8 +155,8 @@ export function ActiveOptionBadges({
   const resolvedState = todoStates.length > 0 ? getState(effectiveStateId, todoStates) : undefined
   const hasState = !!resolvedState
 
-  // Show the stacking container when there are labels or a state badge
-  const hasStackContent = hasLabels || hasState
+  // Show the stacking container when there are labels, suggestions, or a state badge
+  const hasStackContent = hasLabels || hasSuggestions || hasState
 
   // Dynamic stacking with equal visible strips: ResizeObserver computes per-badge
   // margins directly on children. Wider badges get more negative margins so each
@@ -221,6 +246,16 @@ export function ActiveOptionBadges({
                     onRemoveLabel?.(config.id)
                   }
                 }}
+              />
+            ))}
+            {/* AI-suggested label badges */}
+            {resolvedSuggestions.map(({ suggestion, config }) => (
+              <LabelSuggestionBadge
+                key={`suggestion-${suggestion.labelId}`}
+                label={config}
+                value={suggestion.value}
+                onAccept={() => onSuggestionAccept?.(suggestion)}
+                onDismiss={() => onSuggestionDismiss?.(suggestion.labelId)}
               />
             ))}
           </div>

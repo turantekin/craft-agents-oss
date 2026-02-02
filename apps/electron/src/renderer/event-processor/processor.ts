@@ -21,6 +21,7 @@ import {
   handleTypedError,
   handleSourcesChanged,
   handleLabelsChanged,
+  handleLabelSuggestions,
   handleTodoStateChanged,
   handleSessionFlagged,
   handleSessionUnflagged,
@@ -136,6 +137,9 @@ export function processEvent(
 
     case 'labels_changed':
       return handleLabelsChanged(state, event)
+
+    case 'label_suggestions':
+      return handleLabelSuggestions(state, event)
 
     case 'todo_state_changed':
       return handleTodoStateChanged(state, event)

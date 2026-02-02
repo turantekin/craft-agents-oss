@@ -24,6 +24,14 @@ export interface SkillMetadata {
    * Note: Relative paths and inline SVG are NOT supported.
    */
   icon?: string;
+  /**
+   * Optional required permission mode for this skill.
+   * If set, the app will auto-switch to this mode when the skill is invoked.
+   * - 'safe': Read-only exploration (Explore mode)
+   * - 'ask': Prompts for dangerous operations (Ask to Edit mode)
+   * - 'allow-all': Everything allowed, no prompts (Execute mode)
+   */
+  requiredMode?: 'safe' | 'ask' | 'allow-all';
 }
 
 /**

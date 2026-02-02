@@ -64,6 +64,20 @@ export default function AppSettingsPage() {
   const [openAIKeySaving, setOpenAIKeySaving] = useState(false)
   const [openAIKeySaved, setOpenAIKeySaved] = useState(false)
 
+  // Perplexity API key state (for web search delegation)
+  const [perplexityKey, setPerplexityKey] = useState('')
+  const [perplexityKeyInput, setPerplexityKeyInput] = useState('')
+  const [showPerplexityKey, setShowPerplexityKey] = useState(false)
+  const [perplexityKeySaving, setPerplexityKeySaving] = useState(false)
+  const [perplexityKeySaved, setPerplexityKeySaved] = useState(false)
+
+  // Gemini API key state (for large context analysis)
+  const [geminiKey, setGeminiKey] = useState('')
+  const [geminiKeyInput, setGeminiKeyInput] = useState('')
+  const [showGeminiKey, setShowGeminiKey] = useState(false)
+  const [geminiKeySaving, setGeminiKeySaving] = useState(false)
+  const [geminiKeySaved, setGeminiKeySaved] = useState(false)
+
   // Auto-update state
   const updateChecker = useUpdateChecker()
   const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false)
@@ -81,10 +95,12 @@ export default function AppSettingsPage() {
   const loadConnectionInfo = useCallback(async () => {
     if (!window.electronAPI) return
     try {
-      const [billing, notificationsOn, openAIApiKey] = await Promise.all([
+      const [billing, notificationsOn, openAIApiKey, perplexityApiKey, geminiApiKey] = await Promise.all([
         window.electronAPI.getApiSetup(),
         window.electronAPI.getNotificationsEnabled(),
         window.electronAPI.getOpenAIKey(),
+        window.electronAPI.getPerplexityKey(),
+        window.electronAPI.getGeminiKey(),
       ])
       setAuthType(billing.authType)
       setHasCredential(billing.hasCredential)
@@ -92,6 +108,14 @@ export default function AppSettingsPage() {
       if (openAIApiKey) {
         setOpenAIKey(openAIApiKey)
         setOpenAIKeyInput(openAIApiKey)
+      }
+      if (perplexityApiKey) {
+        setPerplexityKey(perplexityApiKey)
+        setPerplexityKeyInput(perplexityApiKey)
+      }
+      if (geminiApiKey) {
+        setGeminiKey(geminiApiKey)
+        setGeminiKeyInput(geminiApiKey)
       }
     } catch (error) {
       console.error('Failed to load settings:', error)
@@ -165,6 +189,60 @@ export default function AppSettingsPage() {
       setOpenAIKeyInput('')
     } catch (error) {
       console.error('Failed to delete OpenAI key:', error)
+    }
+  }, [])
+
+  // Save Perplexity API key
+  const handleSavePerplexityKey = useCallback(async () => {
+    if (!perplexityKeyInput.trim()) return
+    setPerplexityKeySaving(true)
+    try {
+      await window.electronAPI.setPerplexityKey(perplexityKeyInput.trim())
+      setPerplexityKey(perplexityKeyInput.trim())
+      setPerplexityKeySaved(true)
+      setTimeout(() => setPerplexityKeySaved(false), 2000)
+    } catch (error) {
+      console.error('Failed to save Perplexity key:', error)
+    } finally {
+      setPerplexityKeySaving(false)
+    }
+  }, [perplexityKeyInput])
+
+  // Delete Perplexity API key
+  const handleDeletePerplexityKey = useCallback(async () => {
+    try {
+      await window.electronAPI.deletePerplexityKey()
+      setPerplexityKey('')
+      setPerplexityKeyInput('')
+    } catch (error) {
+      console.error('Failed to delete Perplexity key:', error)
+    }
+  }, [])
+
+  // Save Gemini API key
+  const handleSaveGeminiKey = useCallback(async () => {
+    if (!geminiKeyInput.trim()) return
+    setGeminiKeySaving(true)
+    try {
+      await window.electronAPI.setGeminiKey(geminiKeyInput.trim())
+      setGeminiKey(geminiKeyInput.trim())
+      setGeminiKeySaved(true)
+      setTimeout(() => setGeminiKeySaved(false), 2000)
+    } catch (error) {
+      console.error('Failed to save Gemini key:', error)
+    } finally {
+      setGeminiKeySaving(false)
+    }
+  }, [geminiKeyInput])
+
+  // Delete Gemini API key
+  const handleDeleteGeminiKey = useCallback(async () => {
+    try {
+      await window.electronAPI.deleteGeminiKey()
+      setGeminiKey('')
+      setGeminiKeyInput('')
+    } catch (error) {
+      console.error('Failed to delete Gemini key:', error)
     }
   }, [])
 
@@ -260,6 +338,116 @@ export default function AppSettingsPage() {
                         variant="ghost"
                         size="sm"
                         onClick={handleDeleteOpenAIKey}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                </SettingsRow>
+
+                {/* Perplexity API Key */}
+                <SettingsRow
+                  label="Perplexity API Key"
+                  description="Used for real-time web search with citations. Get your key from perplexity.ai/settings/api"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Input
+                        type={showPerplexityKey ? 'text' : 'password'}
+                        value={perplexityKeyInput}
+                        onChange={(e) => setPerplexityKeyInput(e.target.value)}
+                        placeholder="pplx-..."
+                        className="w-[280px] pr-8 font-mono text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPerplexityKey(!showPerplexityKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showPerplexityKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSavePerplexityKey}
+                      disabled={!perplexityKeyInput.trim() || perplexityKeyInput === perplexityKey || perplexityKeySaving}
+                    >
+                      {perplexityKeySaved ? (
+                        <>
+                          <Check className="h-4 w-4 mr-1" />
+                          Saved
+                        </>
+                      ) : perplexityKeySaving ? (
+                        <>
+                          <Spinner className="mr-1" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save'
+                      )}
+                    </Button>
+                    {perplexityKey && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleDeletePerplexityKey}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                </SettingsRow>
+
+                {/* Gemini API Key */}
+                <SettingsRow
+                  label="Google Gemini API Key"
+                  description="Used for large context analysis (1M+ tokens). Get your key from aistudio.google.com/apikey"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Input
+                        type={showGeminiKey ? 'text' : 'password'}
+                        value={geminiKeyInput}
+                        onChange={(e) => setGeminiKeyInput(e.target.value)}
+                        placeholder="AIza..."
+                        className="w-[280px] pr-8 font-mono text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowGeminiKey(!showGeminiKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showGeminiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSaveGeminiKey}
+                      disabled={!geminiKeyInput.trim() || geminiKeyInput === geminiKey || geminiKeySaving}
+                    >
+                      {geminiKeySaved ? (
+                        <>
+                          <Check className="h-4 w-4 mr-1" />
+                          Saved
+                        </>
+                      ) : geminiKeySaving ? (
+                        <>
+                          <Spinner className="mr-1" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save'
+                      )}
+                    </Button>
+                    {geminiKey && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleDeleteGeminiKey}
                         className="text-destructive hover:text-destructive"
                       >
                         Remove

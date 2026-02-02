@@ -1346,8 +1346,11 @@ export function shouldAllowToolInMode(
 
   // Handle MCP tools - allow read-only, block write operations
   if (toolName.startsWith('mcp__')) {
-    // Always allow preferences and documentation tools (read-only, always available)
-    if (toolName.startsWith('mcp__preferences__') || toolName.startsWith('mcp__craft-agents-docs__')) {
+    // Always allow built-in MCP servers (read-only, always available)
+    // - preferences: user preferences storage
+    // - craft-agents-docs: documentation search
+    // - delegation: delegation tools (Perplexity search, Gemini analysis) - external API calls but read-only
+    if (toolName.startsWith('mcp__preferences__') || toolName.startsWith('mcp__craft-agents-docs__') || toolName.startsWith('mcp__delegation__')) {
       return { allowed: true };
     }
 

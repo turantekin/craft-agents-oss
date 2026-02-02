@@ -39,6 +39,34 @@ export interface AutoLabelRule {
 }
 
 /**
+ * AI classification settings for a label.
+ * When present, the AI evaluator analyzes user messages for semantic matches
+ * using Claude Haiku for fast, cost-efficient classification.
+ */
+export interface AiClassificationConfig {
+  /**
+   * Human-readable description of when this label should apply.
+   * This is the primary input to the AI classifier.
+   * Example: "Conversations about debugging or fixing errors in code"
+   */
+  description: string
+
+  /**
+   * How AI matches should be applied:
+   * - 'suggest': Show as suggestion, user must accept (default, safer)
+   * - 'auto': Auto-apply like regex rules (faster workflow)
+   */
+  mode?: 'suggest' | 'auto'
+
+  /**
+   * Optional value extraction hint for valued labels (those with valueType).
+   * When set, AI will attempt to extract a value matching this guidance.
+   * Example for priority: "Extract priority level (1-5, or map low/medium/high to 2/3/4)"
+   */
+  valueHint?: string
+}
+
+/**
  * Label configuration (stored in labels/config.json).
  * Recursive: each label can have nested children forming a tree.
  * Array position = display order (no explicit order field needed).
@@ -71,6 +99,14 @@ export interface LabelConfig {
    * Multiple rules = multiple ways to trigger (evaluated in order, all matches collected).
    */
   autoRules?: AutoLabelRule[];
+
+  /**
+   * AI classification settings for this label.
+   * When present, the AI evaluator will analyze messages for semantic matches.
+   * Uses Claude Haiku for fast, cost-efficient classification.
+   * Omit to disable AI classification for this label (regex-only or manual).
+   */
+  aiClassification?: AiClassificationConfig;
 }
 
 /**

@@ -21,6 +21,8 @@ export type CredentialType =
   | 'anthropic_api_key'  // Anthropic API key for Claude
   | 'claude_oauth'       // Claude OAuth token (Max subscription)
   | 'openai_api_key'     // OpenAI API key (for Whisper voice transcription)
+  | 'perplexity_api_key' // Perplexity API key (for web search delegation)
+  | 'gemini_api_key'     // Google Gemini API key (for large context analysis)
   // Workspace credentials
   | 'workspace_oauth'    // Workspace MCP OAuth token
   // Source credentials (stored at ~/.craft-agent/workspaces/{ws}/sources/{slug}/)
@@ -34,6 +36,8 @@ const VALID_CREDENTIAL_TYPES: readonly CredentialType[] = [
   'anthropic_api_key',
   'claude_oauth',
   'openai_api_key',
+  'perplexity_api_key',
+  'gemini_api_key',
   'workspace_oauth',
   'source_oauth',
   'source_bearer',

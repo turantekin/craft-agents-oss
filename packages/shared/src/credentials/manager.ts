@@ -243,6 +243,46 @@ export class CredentialManager {
     return this.delete({ type: 'openai_api_key' });
   }
 
+  // ============================================================
+  // Perplexity API Key (for web search delegation)
+  // ============================================================
+
+  /** Get Perplexity API key (for web search delegation) */
+  async getPerplexityApiKey(): Promise<string | null> {
+    const cred = await this.get({ type: 'perplexity_api_key' });
+    return cred?.value || null;
+  }
+
+  /** Set Perplexity API key (for web search delegation) */
+  async setPerplexityApiKey(key: string): Promise<void> {
+    await this.set({ type: 'perplexity_api_key' }, { value: key });
+  }
+
+  /** Delete Perplexity API key */
+  async deletePerplexityApiKey(): Promise<boolean> {
+    return this.delete({ type: 'perplexity_api_key' });
+  }
+
+  // ============================================================
+  // Gemini API Key (for large context analysis)
+  // ============================================================
+
+  /** Get Gemini API key (for large context analysis) */
+  async getGeminiApiKey(): Promise<string | null> {
+    const cred = await this.get({ type: 'gemini_api_key' });
+    return cred?.value || null;
+  }
+
+  /** Set Gemini API key (for large context analysis) */
+  async setGeminiApiKey(key: string): Promise<void> {
+    await this.set({ type: 'gemini_api_key' }, { value: key });
+  }
+
+  /** Delete Gemini API key */
+  async deleteGeminiApiKey(): Promise<boolean> {
+    return this.delete({ type: 'gemini_api_key' });
+  }
+
   /** Get workspace MCP OAuth credentials */
   async getWorkspaceOAuth(workspaceId: string): Promise<{
     accessToken: string;

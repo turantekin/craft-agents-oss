@@ -20,6 +20,10 @@ import {
   Info_Table,
   Info_Markdown,
 } from '@/components/info'
+import { Switch } from '@/components/ui/switch'
+import { PERMISSION_MODE_CONFIG } from '@craft-agent/shared/agent/mode-types'
+import { useSetAtom } from 'jotai'
+import { skillPreferencesAtom } from '@/atoms/skills'
 import type { LoadedSkill } from '../../shared/types'
 
 interface SkillInfoPageProps {
@@ -31,8 +35,10 @@ export default function SkillInfoPage({ skillSlug, workspaceId }: SkillInfoPageP
   const [skill, setSkill] = useState<LoadedSkill | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [autoSwitchMode, setAutoSwitchMode] = useState<boolean>(true) // Default to enabled
+  const setSkillPreferences = useSetAtom(skillPreferencesAtom)
 
-  // Load skill data
+  // Load skill data and preferences
   useEffect(() => {
     let isMounted = true
     setLoading(true)
@@ -48,6 +54,12 @@ export default function SkillInfoPage({ skillSlug, workspaceId }: SkillInfoPageP
         const found = skills.find((s) => s.slug === skillSlug)
         if (found) {
           setSkill(found)
+
+          // Load skill preference (autoSwitchMode defaults to true if not set)
+          const pref = await window.electronAPI.getSkillPreference(workspaceId, skillSlug)
+          if (isMounted) {
+            setAutoSwitchMode(pref.autoSwitchMode !== false) // Default to true
+          }
         } else {
           setError('Skill not found')
         }
@@ -105,6 +117,32 @@ export default function SkillInfoPage({ skillSlug, workspaceId }: SkillInfoPageP
   const handleOpenInNewWindow = useCallback(() => {
     window.electronAPI.openUrl(`craftagents://skills/skill/${skillSlug}?window=focused`)
   }, [skillSlug])
+
+  // Handle auto-switch mode toggle
+  const handleAutoSwitchModeChange = useCallback(async (enabled: boolean) => {
+    setAutoSwitchMode(enabled)
+    try {
+      await window.electronAPI.setSkillPreference(workspaceId, skillSlug, { autoSwitchMode: enabled })
+
+      // Sync to atom so App.tsx sees the change immediately
+      setSkillPreferences(prev => ({
+        ...prev,
+        [skillSlug]: { ...prev[skillSlug], autoSwitchMode: enabled }
+      }))
+
+      const modeName = skill?.metadata.requiredMode
+        ? PERMISSION_MODE_CONFIG[skill.metadata.requiredMode].displayName
+        : 'required'
+      toast.success(enabled
+        ? `Auto-switch to ${modeName} mode enabled`
+        : `Auto-switch to ${modeName} mode disabled`
+      )
+    } catch (err) {
+      // Revert on error
+      setAutoSwitchMode(!enabled)
+      toast.error('Failed to save preference')
+    }
+  }, [workspaceId, skillSlug, skill, setSkillPreferences])
 
   // Get skill name for header
   const skillName = skill?.metadata.name || skillSlug
@@ -185,40 +223,63 @@ export default function SkillInfoPage({ skillSlug, workspaceId }: SkillInfoPageP
             </Info_Table>
           </Info_Section>
 
-          {/* Permission Modes */}
-          {skill.metadata.alwaysAllow && skill.metadata.alwaysAllow.length > 0 && (
+          {/* Permission Modes - show if skill has requiredMode or alwaysAllow */}
+          {(skill.metadata.requiredMode || (skill.metadata.alwaysAllow && skill.metadata.alwaysAllow.length > 0)) && (
             <Info_Section title="Permission Modes">
-              <div className="space-y-2 px-4 py-3">
-                <p className="text-xs text-muted-foreground mb-3">
-                  How "Always Allowed Tools" interacts with permission modes:
-                </p>
-                <div className="rounded-[8px] border border-border/50 overflow-hidden">
-                  <table className="w-full text-sm">
-                    <tbody>
-                      <tr className="border-b border-border/30">
-                        <td className="px-3 py-2 font-medium text-muted-foreground w-[140px]">Explore</td>
-                        <td className="px-3 py-2 flex items-center gap-2">
-                          <X className="h-3.5 w-3.5 text-destructive shrink-0" />
-                          <span className="text-foreground/80">Blocked — write tools blocked regardless</span>
-                        </td>
-                      </tr>
-                      <tr className="border-b border-border/30">
-                        <td className="px-3 py-2 font-medium text-muted-foreground">Ask to Edit</td>
-                        <td className="px-3 py-2 flex items-center gap-2">
-                          <Check className="h-3.5 w-3.5 text-success shrink-0" />
-                          <span className="text-foreground/80">Auto-approved — no prompts for allowed tools</span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="px-3 py-2 font-medium text-muted-foreground">Auto</td>
-                        <td className="px-3 py-2 flex items-center gap-2">
-                          <Minus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span className="text-foreground/80">No effect — all tools already auto-approved</span>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+              <div className="space-y-4 px-4 py-3">
+                {/* Auto-switch toggle for skills with requiredMode */}
+                {skill.metadata.requiredMode && (
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border/50">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm">Auto-switch to {PERMISSION_MODE_CONFIG[skill.metadata.requiredMode].displayName} mode</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Automatically switch permission mode when this skill is invoked
+                      </p>
+                    </div>
+                    <Switch
+                      checked={autoSwitchMode}
+                      onCheckedChange={handleAutoSwitchModeChange}
+                    />
+                  </div>
+                )}
+
+                {/* Always Allowed Tools explanation */}
+                {skill.metadata.alwaysAllow && skill.metadata.alwaysAllow.length > 0 && (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      How "Always Allowed Tools" interacts with permission modes:
+                    </p>
+                    <div className="rounded-[8px] border border-border/50 overflow-hidden">
+                      <table className="w-full text-sm">
+                        <tbody>
+                          <tr className="border-b border-border/30">
+                            <td className="px-3 py-2 font-medium text-muted-foreground w-[140px]">Explore</td>
+                            <td className="px-3 py-2 flex items-center gap-2">
+                              <X className="h-3.5 w-3.5 text-destructive shrink-0" />
+                              <span className="text-foreground/80">Blocked — write tools blocked regardless</span>
+                            </td>
+                          </tr>
+                          <tr className="border-b border-border/30">
+                            <td className="px-3 py-2 font-medium text-muted-foreground">Ask to Edit</td>
+                            <td className="px-3 py-2 flex items-center gap-2">
+                              <Check className="h-3.5 w-3.5 text-success shrink-0" />
+                              <span className="text-foreground/80">Auto-approved — no prompts for allowed tools</span>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-medium text-muted-foreground">Auto</td>
+                            <td className="px-3 py-2 flex items-center gap-2">
+                              <Minus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-foreground/80">No effect — all tools already auto-approved</span>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
               </div>
             </Info_Section>
           )}

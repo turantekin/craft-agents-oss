@@ -131,6 +131,20 @@ export interface LabelsChangedEvent {
 }
 
 /**
+ * Label suggestions event - AI suggested labels pending user acceptance
+ */
+export interface LabelSuggestionsEvent {
+  type: 'label_suggestions'
+  sessionId: string
+  suggestions: Array<{
+    labelId: string
+    value?: string
+    triggerMessageId: string
+    suggestedAt: number
+  }>
+}
+
+/**
  * Todo state changed event (external metadata change or agent tool)
  */
 export interface TodoStateChangedEvent {
@@ -403,6 +417,7 @@ export type AgentEvent =
   | CredentialRequestEvent
   | SourcesChangedEvent
   | LabelsChangedEvent
+  | LabelSuggestionsEvent
   | TodoStateChangedEvent
   | SessionFlaggedEvent
   | SessionUnflaggedEvent

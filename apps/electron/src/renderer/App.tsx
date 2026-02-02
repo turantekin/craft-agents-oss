@@ -39,7 +39,7 @@ import {
   type SessionMeta,
 } from '@/atoms/sessions'
 import { sourcesAtom } from '@/atoms/sources'
-import { skillsAtom } from '@/atoms/skills'
+import { skillsAtom, skillPreferencesAtom } from '@/atoms/skills'
 import { extractBadges } from '@/lib/mentions'
 import { getDefaultStore } from 'jotai'
 import {
@@ -52,6 +52,8 @@ import {
   JSONPreviewOverlay,
 } from '@craft-agent/ui'
 import { useLinkInterceptor, type FilePreviewState } from '@/hooks/useLinkInterceptor'
+import { toast } from 'sonner'
+import { PERMISSION_MODE_CONFIG } from '@craft-agent/shared/agent/mode-types'
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'ready'
 
@@ -214,6 +216,7 @@ export default function App() {
   // Sources and skills for badge extraction
   const sources = useAtomValue(sourcesAtom)
   const skills = useAtomValue(skillsAtom)
+  const skillPreferences = useAtomValue(skillPreferencesAtom)
 
   // Compute if app is fully ready (all data loaded)
   const isFullyReady = appState === 'ready' && sessionsLoaded
@@ -786,6 +789,50 @@ export default function App() {
       // Step 3: Check if ultrathink is enabled for this session
       const isUltrathink = sessionOptions.get(sessionId)?.ultrathinkEnabled ?? false
 
+      // Step 3.5: Auto-switch permission mode if skill requires it
+      // Only switch if user has auto-switch enabled for the skill (defaults to enabled)
+      if (skillSlugs?.length) {
+        const currentMode = sessionOptions.get(sessionId)?.permissionMode ?? 'ask'
+
+        // Find skills that require a higher permission mode AND have auto-switch enabled
+        const skillsRequiringModeSwitch = skillSlugs
+          .map(slug => skills.find(s => s.slug === slug))
+          .filter((skill): skill is NonNullable<typeof skill> => {
+            if (!skill) return false
+            const requiredMode = skill.metadata.requiredMode
+            if (!requiredMode) return false
+
+            // Check user preference - auto-switch is enabled by default (true if not explicitly set to false)
+            const pref = skillPreferences[skill.slug]
+            if (pref?.autoSwitchMode === false) return false
+
+            // Check if current mode is "lower" than required
+            // Order: safe < ask < allow-all
+            const modeOrder = { 'safe': 0, 'ask': 1, 'allow-all': 2 }
+            return modeOrder[currentMode] < modeOrder[requiredMode]
+          })
+
+        if (skillsRequiringModeSwitch.length > 0) {
+          // Get the highest required mode among all skills
+          const modeOrder = { 'safe': 0, 'ask': 1, 'allow-all': 2 }
+          const highestRequiredMode = skillsRequiringModeSwitch.reduce((highest, skill) => {
+            const required = skill.metadata.requiredMode!
+            return modeOrder[required] > modeOrder[highest] ? required : highest
+          }, 'safe' as 'safe' | 'ask' | 'allow-all')
+
+          // Auto-switch to the required mode
+          handleSessionOptionsChange(sessionId, { permissionMode: highestRequiredMode })
+
+          // Show toast notification
+          const modeName = PERMISSION_MODE_CONFIG[highestRequiredMode].displayName
+          const skillNames = skillsRequiringModeSwitch.map(s => s.metadata.name).join(', ')
+          toast.info(`Switched to ${modeName} mode`, {
+            description: `${skillNames} requires ${modeName} mode to run tools.`,
+            duration: 4000,
+          })
+        }
+      }
+
       // Step 4: Extract badges from mentions (sources/skills) with embedded icons
       // Badges are self-contained for display in UserMessageBubble and viewer
       const badges: ContentBadge[] = windowWorkspaceId
@@ -871,7 +918,7 @@ export default function App() {
         ]
       }))
     }
-  }, [sessionOptions, updateSessionById, skills, sources, windowWorkspaceId])
+  }, [sessionOptions, updateSessionById, skills, sources, windowWorkspaceId, skillPreferences])
 
   const handleModelChange = useCallback((model: string) => {
     setCurrentModel(model)

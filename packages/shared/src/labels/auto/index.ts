@@ -1,4 +1,5 @@
-export type { AutoLabelMatch } from './types.ts'
+export type { AutoLabelMatch, LabelSuggestion } from './types.ts'
 export { evaluateAutoLabels, collectAutoLabelRules } from './evaluator.ts'
+export { evaluateAiLabels, collectAiClassificationLabels } from './ai-evaluator.ts'
 export { normalizeValue } from './normalize.ts'
 export { validateAutoLabelRule } from './validation.ts'
