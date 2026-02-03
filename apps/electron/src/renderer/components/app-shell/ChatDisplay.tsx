@@ -1407,6 +1407,12 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             detail: { sessionId: session?.id, planPath }
                           }))
                         }}
+                        onChoiceSelect={(choice) => {
+                          // Dispatch quick choice event to send the selected option as a user message
+                          window.dispatchEvent(new CustomEvent('craft:quick-choice', {
+                            detail: { text: choice, sessionId: session?.id }
+                          }))
+                        }}
                         onPopOut={(text) => {
                           // Open raw markdown source in code viewer
                           setOverlayState({

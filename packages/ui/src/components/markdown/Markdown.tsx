@@ -7,6 +7,7 @@ import { CodeBlock, InlineCode } from './CodeBlock'
 import { MarkdownDiffBlock } from './MarkdownDiffBlock'
 import { MarkdownJsonBlock } from './MarkdownJsonBlock'
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock'
+import { QuickChoiceBlock } from './QuickChoiceBlock'
 import { preprocessLinks } from './linkify'
 import remarkCollapsibleSections from './remarkCollapsibleSections'
 import { CollapsibleSection } from './CollapsibleSection'
@@ -59,6 +60,11 @@ export interface MarkdownProps {
    * @default true
    */
   hideFirstMermaidExpand?: boolean
+  /**
+   * Callback when a quick choice option is selected
+   * Used for interactive choice buttons in ```choices code blocks
+   */
+  onChoiceSelect?: (choice: string) => void
 }
 
 /** Context for collapsible sections */
@@ -69,6 +75,76 @@ interface CollapsibleContext {
 
 // File path detection regex - matches paths starting with /, ~/, or ./
 const FILE_PATH_REGEX = /^(?:\/|~\/|\.\/)[\w\-./@]+\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yaml|yml|py|go|rs|css|scss|less|html|htm|txt|log|sh|bash|zsh|swift|kt|java|c|cpp|h|hpp|rb|php|xml|toml|ini|cfg|conf|env|sql|graphql|vue|svelte|astro|prisma)$/i
+
+// Image file path detection regex - matches paths ending with common image extensions
+const IMAGE_PATH_REGEX = /^(?:\/|~\/|\.\/)[\w\-./@]+\.(?:jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff|tif|heic|heif|avif)$/i
+
+/**
+ * LocalImage - Component for displaying local file images
+ * Attempts to load via file:// protocol, shows fallback path if loading fails
+ * (e.g., in web viewer where file:// URLs are not accessible)
+ */
+function LocalImage({ src, alt, originalPath }: { src: string; alt: string; originalPath: string }) {
+  const [loadError, setLoadError] = React.useState(false)
+
+  // Extract folder path from file path
+  const folderPath = originalPath.substring(0, originalPath.lastIndexOf('/'))
+
+  // Open folder in system file manager (shows file selected in Finder)
+  const handleOpenFolder = () => {
+    // Use the Electron API to show file in folder if available
+    if (window.electronAPI?.showInFolder) {
+      window.electronAPI.showInFolder(originalPath)
+    } else {
+      // Fallback: copy path to clipboard
+      navigator.clipboard.writeText(folderPath)
+    }
+  }
+
+  if (loadError) {
+    // Fallback for web viewer or if file not found
+    return (
+      <div className="my-3 p-3 bg-muted/30 rounded-lg border border-border/50 text-sm inline-block max-w-full">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <span>📷</span>
+          <span>Image saved to:</span>
+        </div>
+        <code className="text-xs mt-1 block font-mono break-all">{originalPath}</code>
+        <button
+          onClick={handleOpenFolder}
+          className="mt-2 flex items-center gap-1.5 text-xs text-primary hover:underline cursor-pointer"
+        >
+          <span>📂</span>
+          <span>Open folder</span>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="my-3 inline-block max-w-full">
+      <img
+        src={src}
+        alt={alt}
+        className="max-w-full max-h-[400px] rounded-lg border border-border/50 shadow-sm"
+        loading="lazy"
+        onError={() => setLoadError(true)}
+      />
+      <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+        <code className="font-mono truncate max-w-[300px]" title={originalPath}>
+          {originalPath.split('/').slice(-2).join('/')}
+        </code>
+        <button
+          onClick={handleOpenFolder}
+          className="flex items-center gap-1 text-primary hover:underline cursor-pointer"
+        >
+          <span>📂</span>
+          <span>Open folder</span>
+        </button>
+      </div>
+    </div>
+  )
+}
 
 /**
  * Create custom components based on render mode.
@@ -88,7 +164,8 @@ function createComponents(
   onFileClick?: (path: string) => void,
   collapsibleContext?: CollapsibleContext | null,
   firstMermaidCodeRef?: React.RefObject<string | null>,
-  hideFirstMermaidExpand: boolean = true
+  hideFirstMermaidExpand: boolean = true,
+  onChoiceSelect?: (choice: string) => void
 ): Partial<Components> {
   const baseComponents: Partial<Components> = {
     // Section wrapper for collapsible headings
@@ -137,16 +214,44 @@ function createComponents(
         </a>
       )
     },
+    // Images: Handle local file paths with file:// protocol
+    img: ({ src, alt }) => {
+      if (!src) return null
+
+      // Check if it's a local file path (absolute path starting with / or ~)
+      const isLocalPath = src.startsWith('/') || src.startsWith('~')
+
+      if (isLocalPath) {
+        // Convert to file:// URL for Electron
+        const fileSrc = `file://${src}`
+        return <LocalImage src={fileSrc} alt={alt || 'Generated image'} originalPath={src} />
+      }
+
+      // HTTP/HTTPS images: render normally
+      return (
+        <img
+          src={src}
+          alt={alt}
+          className="max-w-full rounded-lg my-3"
+          loading="lazy"
+        />
+      )
+    },
   }
 
   // Terminal mode: minimal formatting
   if (mode === 'terminal') {
     return {
       ...baseComponents,
-      // No special code handling - just monospace
-      code: ({ children }) => (
-        <code className="font-mono">{children}</code>
-      ),
+      // No special code handling - just monospace, but detect image paths
+      code: ({ children }) => {
+        const codeText = String(children).trim()
+        if (IMAGE_PATH_REGEX.test(codeText)) {
+          const fileSrc = `file://${codeText}`
+          return <LocalImage src={fileSrc} alt="Generated image" originalPath={codeText} />
+        }
+        return <code className="font-mono">{children}</code>
+      },
       pre: ({ children }) => (
         <pre className="font-mono whitespace-pre-wrap my-2">{children}</pre>
       ),
@@ -197,10 +302,19 @@ function createComponents(
                                 code === firstMermaidCodeRef.current
             return <MarkdownMermaidBlock code={code} className="my-1" showExpandButton={!isFirstBlock} />
           }
+          // Choices code blocks → interactive quick choice buttons
+          if (match?.[1] === 'choices') {
+            return <QuickChoiceBlock code={code} onChoiceSelect={onChoiceSelect} className="my-1" />
+          }
           return <CodeBlock code={code} language={match?.[1]} mode="full" className="my-1" />
         }
 
-        // Inline code
+        // Inline code - check for image paths and render as LocalImage
+        const codeText = String(children).trim()
+        if (IMAGE_PATH_REGEX.test(codeText)) {
+          const fileSrc = `file://${codeText}`
+          return <LocalImage src={fileSrc} alt="Generated image" originalPath={codeText} />
+        }
         return <InlineCode>{children}</InlineCode>
       },
       pre: ({ children }) => <>{children}</>,
@@ -273,9 +387,19 @@ function createComponents(
                               code === firstMermaidCodeRef.current
           return <MarkdownMermaidBlock code={code} className="my-1" showExpandButton={!isFirstBlock} />
         }
+        // Choices code blocks → interactive quick choice buttons
+        if (match?.[1] === 'choices') {
+          return <QuickChoiceBlock code={code} onChoiceSelect={onChoiceSelect} className="my-1" />
+        }
         return <CodeBlock code={code} language={match?.[1]} mode="full" className="my-1" />
       }
 
+      // Inline code - check for image paths and render as LocalImage
+      const codeText = String(children).trim()
+      if (IMAGE_PATH_REGEX.test(codeText)) {
+        const fileSrc = `file://${codeText}`
+        return <LocalImage src={fileSrc} alt="Generated image" originalPath={codeText} />
+      }
       return <InlineCode>{children}</InlineCode>
     },
     pre: ({ children }) => <>{children}</>,
@@ -371,6 +495,7 @@ export function Markdown({
   onFileClick,
   collapsible = false,
   hideFirstMermaidExpand = true,
+  onChoiceSelect,
 }: MarkdownProps) {
   // Get collapsible context if enabled
   const collapsibleContext = useCollapsibleMarkdown()
@@ -389,8 +514,8 @@ export function Markdown({
   }
 
   const components = React.useMemo(
-    () => createComponents(mode, onUrlClick, onFileClick, collapsible ? collapsibleContext : null, firstMermaidCodeRef, hideFirstMermaidExpand),
-    [mode, onUrlClick, onFileClick, collapsible, collapsibleContext, hideFirstMermaidExpand]
+    () => createComponents(mode, onUrlClick, onFileClick, collapsible ? collapsibleContext : null, firstMermaidCodeRef, hideFirstMermaidExpand, onChoiceSelect),
+    [mode, onUrlClick, onFileClick, collapsible, collapsibleContext, hideFirstMermaidExpand, onChoiceSelect]
   )
 
   // Preprocess to convert raw URLs and file paths to markdown links
@@ -405,12 +530,41 @@ export function Markdown({
     [collapsible]
   )
 
+  // Custom URL transform that allows craftagents:// deep links and craftdocs:// links
+  // React-markdown's default urlTransform only allows http, https, mailto, etc.
+  // We need to allow our custom protocols for internal navigation
+  const urlTransform = React.useCallback((url: string) => {
+    // Allow craftagents:// deep links (internal app navigation)
+    if (url.startsWith('craftagents://')) {
+      return url
+    }
+    // Allow craftdocs:// links (Craft Docs app)
+    if (url.startsWith('craftdocs://')) {
+      return url
+    }
+    // Allow file:// URLs for local images in Electron
+    if (url.startsWith('file://')) {
+      return url
+    }
+    // Allow standard protocols
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('mailto:')) {
+      return url
+    }
+    // Allow relative URLs
+    if (url.startsWith('/') || url.startsWith('./') || url.startsWith('../') || url.startsWith('#')) {
+      return url
+    }
+    // Block other protocols (javascript:, data:, etc.) for security
+    return ''
+  }, [])
+
   return (
     <div className={cn('markdown-content', className)}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={[rehypeRaw]}
         components={components}
+        urlTransform={urlTransform}
       >
         {processedContent}
       </ReactMarkdown>

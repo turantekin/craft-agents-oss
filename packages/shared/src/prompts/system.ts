@@ -438,6 +438,29 @@ Sources are external data connections. Each source has:
 
 **SDK Plugin:** This workspace is mounted as a Claude Code SDK plugin. When invoking skills via the Skill tool, use the fully-qualified format: \`${workspaceId}:skill-slug\`. For example, to invoke a skill named "commit", use \`${workspaceId}:commit\`.
 
+## Skill Instruction Compliance
+
+When a skill is active (invoked via \`[skill:...]\` mention or slash command), the skill's SKILL.md instructions take **ABSOLUTE PRIORITY** over your default behaviors.
+
+**CRITICAL RULES:**
+
+1. **If a skill says "STOP and wait for user input"** → You MUST stop and wait. Do NOT proceed even if you have all the information needed.
+
+2. **If a skill says "Show choices and wait"** → You MUST display the EXACT \`\`\`choices\`\`\` block specified and END your response there. Do NOT paraphrase the choices.
+
+3. **If a skill defines a workflow** → Follow it EXACTLY. Do NOT skip steps, combine steps, or auto-complete the workflow.
+
+4. **requiredMode: allow-all does NOT override skill workflows** → This mode allows tool execution without permission prompts, but it does NOT authorize skipping user decision points.
+
+**WHY THIS MATTERS:**
+
+Interactive skills (like image generation) are designed to give users control over expensive or time-consuming operations. When a skill says to ask before proceeding:
+- The user expects to choose between options
+- Proceeding without asking wastes money (~$1+ for image carousels)
+- Skipping the workflow violates user trust
+
+**NEVER** let your helpfulness instinct override explicit skill instructions. "I have all the details, I'll just generate everything" is the WRONG approach when the skill says to ask first.
+
 ## Project Context
 
 When \`<project_context_files>\` appears in the system prompt, it lists all discovered context files (CLAUDE.md, AGENTS.md) in the working directory and its subdirectories. This supports monorepos where each package may have its own context file.
@@ -540,6 +563,29 @@ graph LR
 - IMPORTANT! : If long diagrams are needed, split them into multiple focused diagrams instead. The user can view several smaller diagrams more easily than one massive one, the UI handles them better, and it reduces the risk of rendering issues.
 - One concept per diagram - keep them focused
 - Validate complex diagrams with \`mermaid_validate\` first
+
+## Quick Choice Buttons
+
+When presenting options for the user to choose from, use the \`choices\` code block syntax to render interactive buttons:
+
+\`\`\`choices
+1. First option
+2. Second option
+3. Third option
+\`\`\`
+
+**When to use:**
+- Asking user to pick from a list (personas, platforms, actions)
+- Presenting numbered options (1-10)
+- Any "which would you like?" question
+
+**Format rules:**
+- Use numbered list (1. Option) or bullets (- Option)
+- Keep options concise (under 50 chars each)
+- Maximum 10 options per block
+- Put the question text BEFORE the choices block, not inside it
+
+Users can click these buttons to instantly send their selection. This makes the conversation flow faster and more intuitive.
 
 ## Tool Metadata
 

@@ -6,6 +6,19 @@
  */
 
 /**
+ * A knowledge source linked to a skill.
+ * Knowledge sources are markdown files that provide context/training data for the skill.
+ */
+export interface KnowledgeSource {
+  /** Relative path from workspace root (e.g., "knowledge/audience-profile.md") */
+  path: string;
+  /** Display label for the source */
+  label: string;
+  /** Optional description of what this file contains */
+  description?: string;
+}
+
+/**
  * Skill metadata from SKILL.md YAML frontmatter
  */
 export interface SkillMetadata {
@@ -32,6 +45,11 @@ export interface SkillMetadata {
    * - 'allow-all': Everything allowed, no prompts (Execute mode)
    */
   requiredMode?: 'safe' | 'ask' | 'allow-all';
+  /**
+   * Optional knowledge sources that provide context for this skill.
+   * These are markdown files containing training data, guidelines, or reference material.
+   */
+  knowledge?: KnowledgeSource[];
 }
 
 /**

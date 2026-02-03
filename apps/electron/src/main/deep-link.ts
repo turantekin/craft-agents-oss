@@ -19,6 +19,8 @@
  * Actions:
  *   new-chat                  - Create new chat, optional ?input=text&name=name&send=true
  *                               If send=true is provided with input, immediately sends the message
+ *                               Optional ?skill=skillId to invoke a skill (auto-sends)
+ *                               Optional ?handoff=handoffId for skill chaining context
  *   resume-sdk-session/{id}   - Resume Claude Code session by SDK session ID
  *   delete-session/{id}       - Delete session
  *   flag-session/{id}         - Flag session
@@ -30,6 +32,8 @@
  *   craftagents://settings/shortcuts                     (shortcuts page)
  *   craftagents://sources/source/github                  (github source info)
  *   craftagents://action/new-chat                        (uses active window)
+ *   craftagents://action/new-chat?skill=image-creator    (invoke skill in new chat)
+ *   craftagents://action/new-chat?skill=image-creator&handoff=abc123 (skill with handoff context)
  *   craftagents://action/resume-sdk-session/{sdkId}      (resume Claude Code session)
  *   craftagents://workspace/ws123/allChats/chat/abc123   (targets specific workspace)
  */

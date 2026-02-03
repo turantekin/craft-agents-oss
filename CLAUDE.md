@@ -62,7 +62,7 @@ Core business logic. See `packages/shared/CLAUDE.md` for details.
 - **Sessions** (`src/sessions/`): Persistence with debounced writes
 - **Sources** (`src/sources/`): MCP servers, REST APIs, local filesystems
 - **Labels** (`src/labels/`): Session tagging with regex auto-rules and AI classification
-- **Skills** (`src/skills/`): Markdown-based workflows with metadata, preferences, and required permission modes
+- **Skills** (`src/skills/`): Markdown-based workflows with metadata, preferences, required permission modes, knowledge sources, and inter-skill handoffs
 - **Delegation Tools** (`src/agent/delegation-tools.ts`): Global MCP tools to delegate tasks to Perplexity (web search), Gemini (large context), and OpenAI (reasoning)
 
 ### `@craft-agent/core` (packages/core)
@@ -108,6 +108,9 @@ All config at `~/.craft-agent/`:
   - `sources/` - MCP server configs
   - `skills/` - Skill markdown files
   - `skill-preferences.json` - Per-skill user preferences (e.g., autoSwitchMode)
+  - `knowledge/` - Shared knowledge files for skills (markdown)
+  - `handoffs/` - Temporary inter-skill handoff files (auto-cleaned after 24h)
+  - `styles/` - Visual style libraries (e.g., `image-styles.json`)
   - `statuses/` - Status definitions
   - `labels/config.json` - Label tree with auto-rules and AI classification
 
@@ -127,6 +130,8 @@ External apps can navigate using `craftagents://` URLs:
 - `craftagents://allChats/chat/{sessionId}` - Specific chat
 - `craftagents://settings` - Settings
 - `craftagents://action/new-chat` - Create new chat
+- `craftagents://action/new-chat?skill={skillId}` - New chat with skill
+- `craftagents://action/new-chat?skill={skillId}&handoff={handoffId}` - New chat with skill and handoff context
 
 ### Local MCP Server Security
 When spawning local MCP servers (stdio transport), sensitive env vars are filtered out:
@@ -180,6 +185,64 @@ requiredMode: allow-all
 ```
 When invoked, the session's permission mode switches to the required mode.
 Users can enable/disable auto-switching per skill via `skill-preferences.json`.
+
+### Skill Knowledge Sources
+Skills can link to markdown knowledge files that provide context:
+
+```yaml
+---
+name: Trend to Post
+knowledge:
+  - path: knowledge/audience-profile.md
+    label: Audience Profile
+    description: Target personas and brand voice
+  - path: knowledge/competitor-accounts.md
+    label: Competitor Directory
+---
+```
+
+Knowledge sources are displayed in the Skill Info page with existence checks and preview. Files are relative to workspace root.
+
+### Skill Handoff System
+Skills can pass context to other skills via file-based handoffs (`packages/shared/src/skills/handoff.ts`):
+
+```typescript
+// Source skill creates handoff
+const handoffId = await createHandoff(
+  workspaceRootPath,
+  'trend-to-post',      // source skill
+  sessionId,
+  'image-creator',      // target skill
+  { platform: 'Instagram', topic: 'AI trends', ... }
+);
+
+// Generate deep link
+const deepLink = buildSkillDeepLink('image-creator', handoffId);
+// → craftagents://action/new-chat?skill=image-creator&handoff=abc123
+
+// Target skill reads handoff (auto-deletes after read)
+const handoff = await readHandoff(workspaceRootPath, handoffId);
+```
+
+Handoff flow:
+1. Source skill creates handoff with `createHandoff()`
+2. Deep link opens new chat with target skill and handoff ID
+3. Target skill reads handoff via `readHandoff()` (one-time use, auto-deleted)
+4. Orphaned handoffs cleaned up after 24 hours via `cleanupOldHandoffs()`
+
+### Quick Choice Blocks
+Skills can present interactive choices using `choices` code blocks in markdown:
+
+````markdown
+```choices
+1. Generate all images at once
+2. Create one by one with review
+3. View/edit prompts first
+4. Change visual style
+```
+````
+
+The `QuickChoiceBlock` component (`packages/ui/src/components/markdown/QuickChoiceBlock.tsx`) renders these as clickable pill buttons. Supports numbered lists (`1.`, `2.`) and bullet lists (`-`, `*`). When clicked, sends the selection as a user message.
 
 ## Tech Stack
 

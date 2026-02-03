@@ -68,6 +68,7 @@ export type EditContextKey =
   | 'default-permissions'
   | 'skill-instructions'
   | 'skill-metadata'
+  | 'skill-knowledge'
   | 'source-guide'
   | 'source-config'
   | 'source-permissions'
@@ -178,6 +179,25 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
         'Confirm clearly when done.',
     },
     example: 'Update the skill description',
+    model: 'haiku',
+    systemPromptPreset: 'mini',
+    inlineExecution: true,
+  }),
+
+  'skill-knowledge': (location) => ({
+    context: {
+      label: 'Skill Knowledge Sources',
+      filePath: `${location}/SKILL.md`,
+      context:
+        'The user is editing knowledge sources in the YAML frontmatter of SKILL.md. ' +
+        'Knowledge sources are markdown files that provide context/training data for the skill. ' +
+        'Format: knowledge: [{path: "knowledge/file.md", label: "Display Name", description: "Optional description"}] ' +
+        'Paths are relative to workspace root. ' +
+        'Keep the content after the frontmatter unchanged unless specifically requested. ' +
+        'After editing, call skill_validate with the skill slug to verify the changes. ' +
+        'Confirm clearly when done.',
+    },
+    example: 'Add a knowledge source for brand guidelines',
     model: 'haiku',
     systemPromptPreset: 'mini',
     inlineExecution: true,

@@ -441,6 +441,25 @@ export function FreeFormInput({
     return () => window.removeEventListener('craft:approve-plan', handleApprovePlan as EventListener)
   }, [sessionId, permissionMode, onPermissionModeChange, onSubmit])
 
+  // Listen for craft:quick-choice events (used by QuickChoiceBlock buttons)
+  // Submits the selected choice as a user message
+  // Only process events for this session (sessionId must match)
+  React.useEffect(() => {
+    const handleQuickChoice = (e: CustomEvent<{ text: string; sessionId?: string }>) => {
+      // Only handle if this event is for our session
+      if (e.detail?.sessionId && e.detail.sessionId !== sessionId) {
+        return
+      }
+      const text = e.detail?.text
+      if (!text) return
+      // Submit the message
+      onSubmit(text, undefined)
+    }
+
+    window.addEventListener('craft:quick-choice', handleQuickChoice as EventListener)
+    return () => window.removeEventListener('craft:quick-choice', handleQuickChoice as EventListener)
+  }, [sessionId, onSubmit])
+
   // Listen for craft:approve-plan-with-compact events (Accept & Compact option)
   // This compacts the conversation first, then executes the plan.
   // The pending state is persisted to survive page reloads (CMD+R).

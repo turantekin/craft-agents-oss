@@ -306,6 +306,10 @@ const api: ElectronAPI = {
     ipcRenderer.invoke(IPC_CHANNELS.SKILLS_SET_PREFERENCE, workspaceId, skillSlug, updates),
   getAllSkillPreferences: (workspaceId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.SKILLS_GET_ALL_PREFERENCES, workspaceId),
+  readKnowledgeSource: (workspaceId: string, relativePath: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SKILLS_READ_KNOWLEDGE, workspaceId, relativePath),
+  checkKnowledgeExists: (workspaceId: string, relativePath: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SKILLS_CHECK_KNOWLEDGE_EXISTS, workspaceId, relativePath),
 
   // Skills change listener (live updates when skills are added/removed/modified)
   onSkillsChanged: (callback: (skills: import('@craft-agent/shared/skills').LoadedSkill[]) => void) => {

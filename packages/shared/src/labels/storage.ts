@@ -36,21 +36,61 @@ export function getDefaultLabelConfig(): WorkspaceLabelConfig {
         id: 'development',
         name: 'Development',
         color: { light: '#3B82F6', dark: '#60A5FA' },
+        aiClassification: {
+          description:
+            'Technical conversations about software development, programming, coding tasks, or building software',
+          mode: 'auto',
+        },
         children: [
           {
             id: 'code',
             name: 'Code',
             color: { light: '#4F46E5', dark: '#818CF8' }, // indigo shift
+            autoRules: [
+              {
+                pattern:
+                  '\\b(implement|refactor|function|class|component|api|endpoint|module)\\b',
+                flags: 'i',
+              },
+            ],
+            aiClassification: {
+              description:
+                'Writing new code, implementing features, creating functions/classes/components, or general coding tasks',
+              mode: 'auto',
+            },
           },
           {
             id: 'bug',
             name: 'Bug',
             color: { light: '#0EA5E9', dark: '#38BDF8' }, // sky shift
+            autoRules: [
+              {
+                pattern: '\\b(bug|error|crash|fix|broken|issue|debug|failing)\\b',
+                flags: 'i',
+              },
+            ],
+            aiClassification: {
+              description:
+                'Debugging, fixing errors, resolving crashes, or troubleshooting code issues',
+              mode: 'auto',
+            },
           },
           {
             id: 'automation',
             name: 'Automation',
             color: { light: '#06B6D4', dark: '#22D3EE' }, // cyan shift
+            autoRules: [
+              {
+                pattern:
+                  '\\b(automate|script|workflow|ci|cd|pipeline|cron|scheduled|batch)\\b',
+                flags: 'i',
+              },
+            ],
+            aiClassification: {
+              description:
+                'Creating automation scripts, CI/CD pipelines, scheduled tasks, or workflow automation',
+              mode: 'auto',
+            },
           },
         ],
       },
@@ -58,21 +98,61 @@ export function getDefaultLabelConfig(): WorkspaceLabelConfig {
         id: 'content',
         name: 'Content',
         color: { light: '#8B5CF6', dark: '#A78BFA' },
+        aiClassification: {
+          description:
+            'Creating, editing, or working with written content, documentation, or creative materials',
+          mode: 'auto',
+        },
         children: [
           {
             id: 'writing',
             name: 'Writing',
             color: { light: '#7C3AED', dark: '#C4B5FD' }, // deeper violet
+            autoRules: [
+              {
+                pattern:
+                  '\\b(write|draft|blog|article|post|essay|copy|content|documentation)\\b',
+                flags: 'i',
+              },
+            ],
+            aiClassification: {
+              description:
+                'Writing blog posts, articles, documentation, emails, or any written content creation',
+              mode: 'auto',
+            },
           },
           {
             id: 'research',
             name: 'Research',
             color: { light: '#A855F7', dark: '#C084FC' }, // lighter purple
+            autoRules: [
+              {
+                pattern:
+                  '\\b(research|investigate|explore|analyze|compare|evaluate|study)\\b',
+                flags: 'i',
+              },
+            ],
+            aiClassification: {
+              description:
+                'Researching topics, investigating options, comparing alternatives, or gathering information',
+              mode: 'auto',
+            },
           },
           {
             id: 'design',
             name: 'Design',
             color: { light: '#D946EF', dark: '#E879F9' }, // fuchsia shift
+            autoRules: [
+              {
+                pattern: '\\b(design|ui|ux|layout|wireframe|mockup|prototype|figma)\\b',
+                flags: 'i',
+              },
+            ],
+            aiClassification: {
+              description:
+                'UI/UX design, creating layouts, wireframes, mockups, or visual design work',
+              mode: 'auto',
+            },
           },
         ],
       },
@@ -81,12 +161,31 @@ export function getDefaultLabelConfig(): WorkspaceLabelConfig {
         name: 'Priority',
         color: { light: '#F59E0B', dark: '#FBBF24' },
         valueType: 'number',
+        autoRules: [
+          {
+            pattern: '\\b(?:priority|p)\\s*[:=]?\\s*(\\d+)\\b',
+            flags: 'i',
+            valueTemplate: '$1',
+          },
+          {
+            pattern: '\\b(urgent|asap|critical)\\b',
+            flags: 'i',
+            valueTemplate: '1',
+          },
+        ],
       },
       {
         id: 'project',
         name: 'Project',
         color: 'foreground/50',
         valueType: 'string',
+        autoRules: [
+          {
+            pattern: '\\bproject\\s*[:=]?\\s*["\']?([\\w-]+)["\']?\\b',
+            flags: 'i',
+            valueTemplate: '$1',
+          },
+        ],
       },
     ],
   };

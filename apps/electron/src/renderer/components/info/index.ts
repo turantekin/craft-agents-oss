@@ -46,3 +46,6 @@ export { LabelsDataTable } from './LabelsDataTable'
 export { AutoRulesDataTable } from './AutoRulesDataTable'
 
 export { AiClassificationDataTable } from './AiClassificationDataTable'
+
+export { KnowledgeSourcesSection } from './KnowledgeSourcesSection'
+export type { KnowledgeSourcesSectionProps } from './KnowledgeSourcesSection'

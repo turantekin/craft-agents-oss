@@ -51,8 +51,8 @@ import type { LoadedSource, FolderSourceConfig, SourceConnectionStatus } from '@
 export type { LoadedSource, FolderSourceConfig, SourceConnectionStatus };
 
 // Import skill types
-import type { LoadedSkill, SkillMetadata } from '@craft-agent/shared/skills/types';
-export type { LoadedSkill, SkillMetadata };
+import type { LoadedSkill, SkillMetadata, KnowledgeSource } from '@craft-agent/shared/skills/types';
+export type { LoadedSkill, SkillMetadata, KnowledgeSource };
 
 
 /**
@@ -683,6 +683,8 @@ export const IPC_CHANNELS = {
   SKILLS_GET_PREFERENCE: 'skills:getPreference',
   SKILLS_SET_PREFERENCE: 'skills:setPreference',
   SKILLS_GET_ALL_PREFERENCES: 'skills:getAllPreferences',
+  SKILLS_READ_KNOWLEDGE: 'skills:readKnowledge',
+  SKILLS_CHECK_KNOWLEDGE_EXISTS: 'skills:checkKnowledgeExists',
 
   // Status management (workspace-scoped)
   STATUSES_LIST: 'statuses:list',
@@ -979,6 +981,8 @@ export interface ElectronAPI {
   getSkillPreference(workspaceId: string, skillSlug: string): Promise<import('@craft-agent/shared/skills').SkillPreference>
   setSkillPreference(workspaceId: string, skillSlug: string, updates: { autoSwitchMode?: boolean }): Promise<import('@craft-agent/shared/skills').SkillPreference>
   getAllSkillPreferences(workspaceId: string): Promise<import('@craft-agent/shared/skills').SkillPreferences>
+  readKnowledgeSource(workspaceId: string, relativePath: string): Promise<string | null>
+  checkKnowledgeExists(workspaceId: string, relativePath: string): Promise<boolean>
 
   // Skills change listener (live updates when skills are added/removed/modified)
   onSkillsChanged(callback: (skills: LoadedSkill[]) => void): () => void

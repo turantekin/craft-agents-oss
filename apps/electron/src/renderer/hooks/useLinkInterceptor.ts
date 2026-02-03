@@ -175,6 +175,7 @@ export function useLinkInterceptor(options: LinkInterceptorOptions): LinkInterce
 
   /** URLs always open externally — no in-app browser for security */
   const handleOpenUrl = useCallback((url: string) => {
+    console.log('[useLinkInterceptor] handleOpenUrl called with:', url)
     optionsRef.current.openUrl(url)
   }, []) // Stable: uses optionsRef
 

@@ -19,6 +19,7 @@ import {
   Info_Section,
   Info_Table,
   Info_Markdown,
+  KnowledgeSourcesSection,
 } from '@/components/info'
 import { Switch } from '@/components/ui/switch'
 import { PERMISSION_MODE_CONFIG } from '@craft-agent/shared/agent/mode-types'
@@ -222,6 +223,15 @@ export default function SkillInfoPage({ skillSlug, workspaceId }: SkillInfoPageP
               </Info_Table.Row>
             </Info_Table>
           </Info_Section>
+
+          {/* Knowledge Sources - show if skill has knowledge defined */}
+          {skill.metadata.knowledge && skill.metadata.knowledge.length > 0 && (
+            <KnowledgeSourcesSection
+              sources={skill.metadata.knowledge}
+              workspaceId={workspaceId}
+              skillPath={skill.path}
+            />
+          )}
 
           {/* Permission Modes - show if skill has requiredMode or alwaysAllow */}
           {(skill.metadata.requiredMode || (skill.metadata.alwaysAllow && skill.metadata.alwaysAllow.length > 0)) && (

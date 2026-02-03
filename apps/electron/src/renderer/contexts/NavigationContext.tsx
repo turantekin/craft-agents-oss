@@ -210,10 +210,15 @@ export function NavigationProvider({
   // Handle action navigation (side effects that don't change navigation state)
   const handleActionNavigation = useCallback(
     async (parsed: ParsedRoute) => {
-      if (!workspaceId) return
+      console.log('[NavigationContext] handleActionNavigation called:', parsed)
+      if (!workspaceId) {
+        console.warn('[NavigationContext] No workspaceId, skipping action')
+        return
+      }
 
       switch (parsed.name) {
         case 'new-chat': {
+          console.log('[NavigationContext] Creating new chat with params:', parsed.params)
           // Create session with optional permission mode and working directory from params
           const createOptions: import('../../shared/types').CreateSessionOptions = {}
           if (parsed.params.mode && ['safe', 'ask', 'allow-all'].includes(parsed.params.mode)) {
@@ -287,16 +292,38 @@ export function NavigationProvider({
             }
           }
 
+          // Build the input text, optionally prepending skill mention and handoff context
+          let inputText = parsed.params.input || ''
+
+          // If skill is specified, prepend [skill:workspaceId:skillId] mention
+          // This triggers the skill when the message is sent
+          if (parsed.params.skill) {
+            const skillMention = `[skill:${workspaceId}:${parsed.params.skill}]`
+            inputText = inputText ? `${skillMention} ${inputText}` : skillMention
+            console.log('[NavigationContext] Skill invocation via deep link:', parsed.params.skill)
+          }
+
+          // If handoff is specified, append handoff context instruction
+          // The AI will read the handoff file using the provided ID
+          // We include the workspace ID so the AI knows the exact path
+          if (parsed.params.handoff) {
+            const handoffInstruction = inputText
+              ? `\n\n[Handoff context: Read handoff file at ~/.craft-agent/workspaces/${workspaceId}/handoffs/${parsed.params.handoff}.json]`
+              : `[Handoff context: Read handoff file at ~/.craft-agent/workspaces/${workspaceId}/handoffs/${parsed.params.handoff}.json]`
+            inputText = inputText + handoffInstruction
+            console.log('[NavigationContext] Handoff context via deep link:', parsed.params.handoff)
+          }
+
           // Handle input: either auto-send (if send=true) or pre-fill
-          if (parsed.params.input) {
-            const shouldSend = parsed.params.send === 'true'
+          if (inputText) {
+            const shouldSend = parsed.params.send === 'true' || !!parsed.params.skill // Auto-send if skill specified
             if (shouldSend) {
               // Auto-send the message immediately after session is ready
               // Pass badges in options so they're stored with the message
               setTimeout(() => {
                 window.electronAPI.sendMessage(
                   session.id,
-                  parsed.params.input!,
+                  inputText,
                   undefined, // attachments
                   undefined, // storedAttachments
                   badges ? { badges } : undefined
@@ -305,7 +332,7 @@ export function NavigationProvider({
             } else if (onInputChange) {
               // Pre-fill input box without sending
               setTimeout(() => {
-                onInputChange(session.id, parsed.params.input!)
+                onInputChange(session.id, inputText)
               }, 100)
             }
           }

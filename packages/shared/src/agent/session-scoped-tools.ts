@@ -12,6 +12,7 @@
  * - source_oauth_trigger: Start OAuth authentication for MCP sources
  * - source_google_oauth_trigger: Start Google OAuth authentication (Gmail, Calendar, Drive)
  * - source_credential_prompt: Prompt user for API credentials
+ * - gemini_generate_image: Generate images using Gemini AI (saves to session folder)
  *
  * Source and Skill CRUD is done via standard file editing tools (Read/Write/Edit).
  * See ~/.craft-agent/docs/ for config format documentation.
@@ -19,8 +20,10 @@
 
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'fs';
+import { exec } from 'child_process';
 import { basename, join } from 'path';
+import { getSessionPath } from '../sessions/storage.ts';
 import { getSessionPlansPath } from '../sessions/storage.ts';
 import { debug } from '../utils/debug.ts';
 import { getCredentialManager } from '../credentials/index.ts';
@@ -2000,6 +2003,331 @@ Returns validation result with specific error messages if invalid.`,
 }
 
 // ============================================================
+// Gemini Image Generation Tool
+// ============================================================
+
+/**
+ * Gemini image generation API response structure
+ */
+interface GeminiImageResponse {
+  candidates: Array<{
+    content: {
+      parts: Array<{
+        text?: string;
+        inlineData?: {
+          mimeType: string;
+          data: string; // base64
+        };
+      }>;
+    };
+    finishReason: string;
+  }>;
+  usageMetadata?: {
+    promptTokenCount: number;
+    candidatesTokenCount: number;
+    totalTokenCount: number;
+  };
+}
+
+/**
+ * Create a session-scoped gemini_generate_image tool.
+ * Generates images using Google Gemini's image generation models and saves them to the session folder.
+ */
+export function createGeminiImageTool(sessionId: string, workspaceRootPath: string) {
+  return tool(
+    'gemini_generate_image',
+    `Generate an image using Google Gemini 3 Pro Image (best quality model for social media).
+
+Use this tool to create images for social media posts, marketing materials,
+or visual content. Provide a detailed prompt describing the desired image.
+
+**Tips for good prompts:**
+- Be specific about style (photorealistic, illustration, flat design)
+- Specify lighting, colors, composition
+- Include camera/perspective details if relevant
+- Mention what should NOT be in the image
+- Describe the mood/atmosphere you want
+
+**Aspect ratios:**
+- 1:1 (square) - Instagram feed, LinkedIn
+- 16:9 (landscape) - Twitter, YouTube thumbnails
+- 9:16 (portrait) - Instagram Stories, TikTok
+
+**Cost:** ~$0.13-0.24 per image depending on resolution:
+- 1K/2K (up to 2048x2048): ~$0.13 per image
+- 4K (up to 4096x4096): ~$0.24 per image
+
+**IMPORTANT:** Always show the cost estimate to the user before AND after generating images.
+
+The generated image will be saved to the session's images folder and can be displayed inline.`,
+    {
+      prompt: z.string().describe('Detailed image prompt describing the desired image. Be specific about style, lighting, composition, and mood.'),
+      aspect_ratio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4'])
+        .optional()
+        .describe('Image aspect ratio. Default: 1:1 (square)'),
+      filename: z.string()
+        .optional()
+        .describe('Optional filename (without extension) for the saved image. Default: auto-generated timestamp'),
+    },
+    async (args) => {
+      const { prompt, aspect_ratio = '1:1', filename } = args;
+      debug(`[gemini_generate_image] Generating image with prompt: ${prompt.substring(0, 100)}...`);
+
+      try {
+        const manager = getCredentialManager();
+        const apiKey = await manager.getGeminiApiKey();
+
+        if (!apiKey) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: 'Gemini API key not configured. Ask the user to add their Google Gemini API key in Settings > App > Integrations.',
+            }],
+            isError: true,
+          };
+        }
+
+        // Call Gemini image generation API
+        // Using gemini-3-pro-image-preview model (best quality for social media)
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    {
+                      text: prompt,
+                    },
+                  ],
+                },
+              ],
+              generationConfig: {
+                responseModalities: ['TEXT', 'IMAGE'],
+              },
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          debug(`[gemini_generate_image] API error: ${response.status} - ${errorText}`);
+
+          if (response.status === 401 || response.status === 403) {
+            return {
+              content: [{
+                type: 'text' as const,
+                text: 'Gemini API key is invalid or lacks permissions for image generation. Ask the user to check their API key in Settings > App > Integrations.',
+              }],
+              isError: true,
+            };
+          }
+
+          if (response.status === 429) {
+            return {
+              content: [{
+                type: 'text' as const,
+                text: 'Gemini API rate limit exceeded. Please wait a moment and try again.',
+              }],
+              isError: true,
+            };
+          }
+
+          if (response.status === 400) {
+            // Parse error for more helpful message
+            try {
+              const errorJson = JSON.parse(errorText);
+              const errorMessage = errorJson.error?.message || errorText;
+              return {
+                content: [{
+                  type: 'text' as const,
+                  text: `Gemini image generation failed: ${errorMessage}\n\nTry simplifying the prompt or removing any potentially blocked content.`,
+                }],
+                isError: true,
+              };
+            } catch {
+              // Fall through to generic error
+            }
+          }
+
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `Gemini API error (${response.status}): ${errorText}`,
+            }],
+            isError: true,
+          };
+        }
+
+        const data = await response.json() as GeminiImageResponse;
+
+        // Find the image part in the response
+        const imagePart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+
+        if (!imagePart?.inlineData) {
+          // Check if there's a text response explaining why no image was generated
+          const textPart = data.candidates?.[0]?.content?.parts?.find(p => p.text);
+          const explanation = textPart?.text || 'No image was generated. The model may have declined the request.';
+
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `Image generation failed: ${explanation}\n\nTry adjusting the prompt to be more specific or less restricted.`,
+            }],
+            isError: true,
+          };
+        }
+
+        const base64Data = imagePart.inlineData.data;
+        const mimeType = imagePart.inlineData.mimeType;
+        const extension = mimeType === 'image/png' ? 'png' : mimeType === 'image/jpeg' ? 'jpg' : 'png';
+
+        // Generate filename - strip any existing extension from user-provided filename
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        let baseFilename = filename || `image-${timestamp}`;
+        // Remove common image extensions if user accidentally included them
+        baseFilename = baseFilename.replace(/\.(png|jpg|jpeg|webp|gif)$/i, '');
+        const imageFilename = `${baseFilename}.${extension}`;
+
+        // Create images directory in session folder
+        const sessionPath = getSessionPath(workspaceRootPath, sessionId);
+        const imagesDir = join(sessionPath, 'images');
+        mkdirSync(imagesDir, { recursive: true });
+
+        // Save the image
+        const imagePath = join(imagesDir, imageFilename);
+        writeFileSync(imagePath, Buffer.from(base64Data, 'base64'));
+
+        debug(`[gemini_generate_image] Image saved to: ${imagePath}`);
+
+        // Return success with image path and cost information
+        // The image can be displayed inline in the chat using markdown: ![Image](path)
+        // Gemini 3 Pro Image pricing: ~$0.13 for 1K/2K, ~$0.24 for 4K
+        const estimatedCost = 0.13; // Conservative estimate (1K/2K resolution)
+        const result = {
+          success: true,
+          imagePath,
+          filename: imageFilename,
+          aspectRatio: aspect_ratio,
+          prompt: prompt.substring(0, 200) + (prompt.length > 200 ? '...' : ''),
+          displayMarkdown: `![Generated Image](${imagePath})`,
+          cost: {
+            estimated: estimatedCost,
+            currency: 'USD',
+            model: 'gemini-3-pro-image-preview',
+            note: 'Cost varies by resolution: ~$0.13 (1K/2K) or ~$0.24 (4K)',
+          },
+        };
+
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify(result, null, 2),
+          }],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        debug(`[gemini_generate_image] Error: ${message}`);
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Gemini image generation failed: ${message}`,
+          }],
+          isError: true,
+        };
+      }
+    }
+  );
+}
+
+/**
+ * Create a session-scoped open_images_folder tool.
+ * Opens the session's images folder in the system file manager (Finder on macOS).
+ */
+export function createOpenImagesFolderTool(sessionId: string, workspaceRootPath: string) {
+  return tool(
+    'open_images_folder',
+    `Open the images folder for this session in the system file manager (Finder on Mac, Explorer on Windows).
+
+Use this when the user wants to:
+- View generated images directly in their file manager
+- Copy images to another location
+- Open images in an external editor
+- Access all images from this session
+
+The images folder is located at: ~/.craft-agent/workspaces/{workspace}/sessions/{session}/images/`,
+    {},
+    async () => {
+      debug(`[open_images_folder] Opening images folder for session ${sessionId}`);
+
+      try {
+        // Build the images folder path
+        const sessionPath = getSessionPath(workspaceRootPath, sessionId);
+        const imagesPath = join(sessionPath, 'images');
+
+        // Ensure the folder exists
+        if (!existsSync(imagesPath)) {
+          mkdirSync(imagesPath, { recursive: true });
+        }
+
+        // Open in system file manager based on platform
+        const platform = process.platform;
+        let command: string;
+
+        if (platform === 'darwin') {
+          // macOS: Use 'open' command
+          command = `open "${imagesPath}"`;
+        } else if (platform === 'win32') {
+          // Windows: Use 'explorer' command
+          command = `explorer "${imagesPath.replace(/\//g, '\\')}"`;
+        } else {
+          // Linux: Try xdg-open
+          command = `xdg-open "${imagesPath}"`;
+        }
+
+        // Execute the command
+        await new Promise<void>((resolve, reject) => {
+          exec(command, (error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+
+        debug(`[open_images_folder] Successfully opened: ${imagesPath}`);
+
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              success: true,
+              path: imagesPath,
+              message: 'Opened images folder in file manager',
+            }, null, 2),
+          }],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        debug(`[open_images_folder] Error: ${message}`);
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Failed to open images folder: ${message}`,
+          }],
+          isError: true,
+        };
+      }
+    }
+  );
+}
+
+// ============================================================
 // Session-Scoped Tools Provider
 // ============================================================
 
@@ -2040,6 +2368,10 @@ export function getSessionScopedTools(sessionId: string, workspaceRootPath: stri
         createSlackOAuthTriggerTool(sessionId, workspaceRootPath),
         createMicrosoftOAuthTriggerTool(sessionId, workspaceRootPath),
         createCredentialPromptTool(sessionId, workspaceRootPath),
+        // Image generation tool (saves to session folder)
+        createGeminiImageTool(sessionId, workspaceRootPath),
+        // Open images folder tool
+        createOpenImagesFolderTool(sessionId, workspaceRootPath),
       ],
     });
     sessionScopedToolsCache.set(cacheKey, cached);

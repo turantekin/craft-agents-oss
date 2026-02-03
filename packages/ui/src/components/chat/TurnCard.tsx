@@ -249,6 +249,8 @@ export interface TurnCardProps {
   animateResponse?: boolean
   /** Hide footers for compact embedding (EditPopover) */
   compactMode?: boolean
+  /** Callback when a quick choice option is selected from ```choices blocks */
+  onChoiceSelect?: (choice: string) => void
 }
 
 // ============================================================================
@@ -1200,6 +1202,8 @@ export interface ResponseCardProps {
   showAcceptPlan?: boolean
   /** Hide footer for compact embedding (EditPopover) */
   compactMode?: boolean
+  /** Callback when a quick choice option is selected from ```choices blocks */
+  onChoiceSelect?: (choice: string) => void
 }
 
 const MAX_HEIGHT = 540
@@ -1233,6 +1237,7 @@ export function ResponseCard({
   isLastResponse = true,
   showAcceptPlan = true,
   compactMode = false,
+  onChoiceSelect,
 }: ResponseCardProps) {
   // Throttled content for display - updates every CONTENT_THROTTLE_MS during streaming
   const [displayedText, setDisplayedText] = useState(text)
@@ -1357,6 +1362,7 @@ export function ResponseCard({
               mode="minimal"
               onUrlClick={onOpenUrl}
               onFileClick={onOpenFile}
+              onChoiceSelect={onChoiceSelect}
             >
               {text}
             </Markdown>
@@ -1461,6 +1467,7 @@ export function ResponseCard({
           mode="minimal"
           onUrlClick={onOpenUrl}
           onFileClick={onOpenFile}
+          onChoiceSelect={onChoiceSelect}
         >
           {displayedText}
         </Markdown>
@@ -1598,6 +1605,7 @@ export const TurnCard = React.memo(function TurnCard({
   displayMode = 'detailed',
   animateResponse = false,
   compactMode = false,
+  onChoiceSelect,
 }: TurnCardProps) {
   // Derive the turn phase from props using the state machine.
   // This provides a single source of truth for lifecycle state,
@@ -1923,6 +1931,7 @@ export const TurnCard = React.memo(function TurnCard({
                 onAcceptWithCompact={onAcceptPlanWithCompact}
                 isLastResponse={isLastResponse}
                 compactMode={compactMode}
+                onChoiceSelect={onChoiceSelect}
               />
             </motion.div>
           )}
@@ -1943,6 +1952,7 @@ export const TurnCard = React.memo(function TurnCard({
             onAcceptWithCompact={onAcceptPlanWithCompact}
             isLastResponse={isLastResponse}
             compactMode={compactMode}
+            onChoiceSelect={onChoiceSelect}
           />
         </div>
       )}

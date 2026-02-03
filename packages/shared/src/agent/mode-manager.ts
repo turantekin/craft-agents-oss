@@ -1354,19 +1354,23 @@ export function shouldAllowToolInMode(
       return { allowed: true };
     }
 
-    // Handle session-scoped tools - allow read-only, block mutations
+    // Handle session-scoped tools - allow read-only and creative, block config mutations
     if (toolName.startsWith('mcp__session__')) {
-      // Read-only session tools - always allowed
-      const readOnlySessionTools = [
+      // Read-only and creative session tools - always allowed
+      // (config_validate and source_test are read-only, gemini_generate_image is creative output)
+      const allowedSessionTools = [
         'mcp__session__SubmitPlan',
         'mcp__session__config_validate',
         'mcp__session__source_test',
+        'mcp__session__skill_validate',
+        'mcp__session__mermaid_validate',
+        'mcp__session__gemini_generate_image', // Creative output, not config mutation
       ];
-      if (readOnlySessionTools.includes(toolName)) {
+      if (allowedSessionTools.includes(toolName)) {
         return { allowed: true };
       }
 
-      // Write session tools - blocked in safe mode
+      // Write session tools (OAuth triggers, credential prompts) - blocked in safe mode
       return {
         allowed: false,
         reason: `Session configuration changes are blocked in ${config.displayName}. Switch to Ask or Allow All mode (${config.shortcutHint}) to create, update, or delete sources and agents.`

@@ -15,7 +15,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import matter from 'gray-matter';
-import type { LoadedSkill, SkillMetadata } from './types.ts';
+import type { LoadedSkill, SkillMetadata, KnowledgeSource } from './types.ts';
 import { getWorkspaceSkillsPath } from '../workspaces/storage.ts';
 import {
   validateIconValue,
@@ -28,6 +28,37 @@ import {
 // ============================================================
 // Parsing
 // ============================================================
+
+/**
+ * Parse and validate knowledge sources from frontmatter
+ * @param raw - Raw knowledge array from YAML frontmatter
+ * @returns Validated knowledge sources array, or undefined if none
+ */
+function parseKnowledgeSources(raw: unknown): KnowledgeSource[] | undefined {
+  if (!raw || !Array.isArray(raw)) {
+    return undefined;
+  }
+
+  const sources: KnowledgeSource[] = [];
+
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+
+    const obj = item as Record<string, unknown>;
+
+    // path and label are required
+    if (typeof obj.path !== 'string' || !obj.path.trim()) continue;
+    if (typeof obj.label !== 'string' || !obj.label.trim()) continue;
+
+    sources.push({
+      path: obj.path.trim(),
+      label: obj.label.trim(),
+      description: typeof obj.description === 'string' ? obj.description.trim() : undefined,
+    });
+  }
+
+  return sources.length > 0 ? sources : undefined;
+}
 
 /**
  * Parse SKILL.md content and extract frontmatter + body
@@ -52,6 +83,9 @@ function parseSkillFile(content: string): { metadata: SkillMetadata; body: strin
       ? requiredMode as 'safe' | 'ask' | 'allow-all'
       : undefined;
 
+    // Parse and validate knowledge sources if present
+    const knowledge = parseKnowledgeSources(parsed.data.knowledge);
+
     return {
       metadata: {
         name: parsed.data.name as string,
@@ -60,6 +94,7 @@ function parseSkillFile(content: string): { metadata: SkillMetadata; body: strin
         alwaysAllow: parsed.data.alwaysAllow as string[] | undefined,
         icon,
         requiredMode: validatedRequiredMode,
+        knowledge,
       },
       body: parsed.content,
     };
@@ -354,4 +389,47 @@ export function updateSkillPreference(
 
   saveSkillPreferences(workspaceRoot, prefs);
   return updated;
+}
+
+// ============================================================
+// Knowledge Source Utilities
+// ============================================================
+
+/**
+ * Resolve a knowledge source path to an absolute path
+ * @param workspaceRoot - Absolute path to workspace root
+ * @param relativePath - Relative path from workspace root (e.g., "knowledge/audience.md")
+ */
+export function resolveKnowledgePath(workspaceRoot: string, relativePath: string): string {
+  return join(workspaceRoot, relativePath);
+}
+
+/**
+ * Check if a knowledge source file exists
+ * @param workspaceRoot - Absolute path to workspace root
+ * @param source - Knowledge source to check
+ */
+export function knowledgeSourceExists(workspaceRoot: string, source: KnowledgeSource): boolean {
+  const fullPath = resolveKnowledgePath(workspaceRoot, source.path);
+  return existsSync(fullPath);
+}
+
+/**
+ * Read the content of a knowledge source file
+ * @param workspaceRoot - Absolute path to workspace root
+ * @param relativePath - Relative path from workspace root
+ * @returns File content or null if not found
+ */
+export function readKnowledgeSource(workspaceRoot: string, relativePath: string): string | null {
+  const fullPath = resolveKnowledgePath(workspaceRoot, relativePath);
+
+  if (!existsSync(fullPath)) {
+    return null;
+  }
+
+  try {
+    return readFileSync(fullPath, 'utf-8');
+  } catch {
+    return null;
+  }
 }

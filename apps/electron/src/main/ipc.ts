@@ -956,10 +956,14 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       // Handle craftagents:// URLs internally via deep link handler
       // This ensures ?window= params work correctly for "Open in New Window"
       if (parsed.protocol === 'craftagents:') {
-        ipcLog.info('[OPEN_URL] Handling as deep link')
+        ipcLog.info('[OPEN_URL] Handling as deep link:', url)
+        ipcLog.info('[OPEN_URL] Parsed:', { protocol: parsed.protocol, hostname: parsed.hostname, pathname: parsed.pathname, search: parsed.search })
         const { handleDeepLink } = await import('./deep-link')
         const result = await handleDeepLink(url, windowManager)
         ipcLog.info('[OPEN_URL] Deep link result:', result)
+        if (!result.success) {
+          ipcLog.error('[OPEN_URL] Deep link failed:', result.error)
+        }
         return
       }
 
@@ -2206,6 +2210,26 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
 
     const { loadSkillPreferences } = await import('@craft-agent/shared/skills')
     return loadSkillPreferences(workspace.rootPath)
+  })
+
+  // Read a knowledge source file content
+  ipcMain.handle(IPC_CHANNELS.SKILLS_READ_KNOWLEDGE, async (_event, workspaceId: string, relativePath: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { readKnowledgeSource } = await import('@craft-agent/shared/skills')
+    return readKnowledgeSource(workspace.rootPath, relativePath)
+  })
+
+  // Check if a knowledge source file exists
+  ipcMain.handle(IPC_CHANNELS.SKILLS_CHECK_KNOWLEDGE_EXISTS, async (_event, workspaceId: string, relativePath: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { resolveKnowledgePath } = await import('@craft-agent/shared/skills')
+    const { existsSync } = await import('fs')
+    const fullPath = resolveKnowledgePath(workspace.rootPath, relativePath)
+    return existsSync(fullPath)
   })
 
   // ============================================================
