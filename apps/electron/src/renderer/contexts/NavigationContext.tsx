@@ -100,6 +100,8 @@ interface NavigationProviderProps {
   children: ReactNode
   /** Current workspace ID */
   workspaceId: string | null
+  /** Current workspace root path (absolute path to workspace folder) */
+  workspaceRootPath: string | null
   /** Session creation handler */
   onCreateSession: (workspaceId: string, options?: import('../../shared/types').CreateSessionOptions) => Promise<Session>
   /** Input change handler for pre-filling chat input */
@@ -111,6 +113,7 @@ interface NavigationProviderProps {
 export function NavigationProvider({
   children,
   workspaceId,
+  workspaceRootPath,
   onCreateSession,
   onInputChange,
   isReady = true,
@@ -305,11 +308,11 @@ export function NavigationProvider({
 
           // If handoff is specified, append handoff context instruction
           // The AI will read the handoff file using the provided ID
-          // We include the workspace ID so the AI knows the exact path
-          if (parsed.params.handoff) {
+          // We use the workspace root path so the AI knows the exact file path
+          if (parsed.params.handoff && workspaceRootPath) {
             const handoffInstruction = inputText
-              ? `\n\n[Handoff context: Read handoff file at ~/.craft-agent/workspaces/${workspaceId}/handoffs/${parsed.params.handoff}.json]`
-              : `[Handoff context: Read handoff file at ~/.craft-agent/workspaces/${workspaceId}/handoffs/${parsed.params.handoff}.json]`
+              ? `\n\n[Handoff context: Read handoff file at ${workspaceRootPath}/handoffs/${parsed.params.handoff}.json]`
+              : `[Handoff context: Read handoff file at ${workspaceRootPath}/handoffs/${parsed.params.handoff}.json]`
             inputText = inputText + handoffInstruction
             console.log('[NavigationContext] Handoff context via deep link:', parsed.params.handoff)
           }
@@ -394,7 +397,7 @@ export function NavigationProvider({
           console.warn('[Navigation] Unknown action:', parsed.name)
       }
     },
-    [workspaceId, onCreateSession, onInputChange, setSession]
+    [workspaceId, workspaceRootPath, onCreateSession, onInputChange, setSession]
   )
 
 

@@ -632,6 +632,11 @@ export const IPC_CHANNELS = {
   SETTINGS_SET_GEMINI_KEY: 'settings:setGeminiKey',
   SETTINGS_DELETE_GEMINI_KEY: 'settings:deleteGeminiKey',
 
+  // Settings - fal.ai (for image generation models)
+  SETTINGS_GET_FAL_KEY: 'settings:getFalKey',
+  SETTINGS_SET_FAL_KEY: 'settings:setFalKey',
+  SETTINGS_DELETE_FAL_KEY: 'settings:deleteFalKey',
+
   // Settings - Model
   SETTINGS_GET_MODEL: 'settings:getModel',
   SETTINGS_SET_MODEL: 'settings:setModel',
@@ -919,6 +924,11 @@ export interface ElectronAPI {
   getGeminiKey(): Promise<string | null>
   setGeminiKey(apiKey: string): Promise<void>
   deleteGeminiKey(): Promise<void>
+
+  // Settings - fal.ai (for image generation models)
+  getFalKey(): Promise<string | null>
+  setFalKey(apiKey: string): Promise<void>
+  deleteFalKey(): Promise<void>
 
   // Settings - Model (global default)
   getModel(): Promise<string | null>

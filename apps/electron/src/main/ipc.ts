@@ -1463,6 +1463,30 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   })
 
   // ============================================================
+  // Settings - fal.ai API Key (for image generation models)
+  // ============================================================
+
+  // Get fal.ai API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_FAL_KEY, async (): Promise<string | null> => {
+    const manager = getCredentialManager()
+    return manager.getFalApiKey()
+  })
+
+  // Set fal.ai API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_FAL_KEY, async (_event, apiKey: string) => {
+    const manager = getCredentialManager()
+    await manager.setFalApiKey(apiKey.trim())
+    ipcLog.info('[Settings] fal.ai API key saved')
+  })
+
+  // Delete fal.ai API key
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_DELETE_FAL_KEY, async () => {
+    const manager = getCredentialManager()
+    await manager.deleteFalApiKey()
+    ipcLog.info('[Settings] fal.ai API key deleted')
+  })
+
+  // ============================================================
   // Settings - Model (Global Default)
   // ============================================================
 

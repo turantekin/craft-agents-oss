@@ -188,6 +188,11 @@ const api: ElectronAPI = {
   setGeminiKey: (apiKey: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_GEMINI_KEY, apiKey),
   deleteGeminiKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_DELETE_GEMINI_KEY),
 
+  // Settings - fal.ai (for image generation models)
+  getFalKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_FAL_KEY),
+  setFalKey: (apiKey: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_FAL_KEY, apiKey),
+  deleteFalKey: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_DELETE_FAL_KEY),
+
   // Settings - Model (global default)
   getModel: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_MODEL),
   setModel: (model: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_MODEL, model),

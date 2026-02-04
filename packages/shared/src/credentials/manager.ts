@@ -283,6 +283,26 @@ export class CredentialManager {
     return this.delete({ type: 'gemini_api_key' });
   }
 
+  // ============================================================
+  // fal.ai API Key (for image generation models)
+  // ============================================================
+
+  /** Get fal.ai API key (for image generation) */
+  async getFalApiKey(): Promise<string | null> {
+    const cred = await this.get({ type: 'fal_api_key' });
+    return cred?.value || null;
+  }
+
+  /** Set fal.ai API key (for image generation) */
+  async setFalApiKey(key: string): Promise<void> {
+    await this.set({ type: 'fal_api_key' }, { value: key });
+  }
+
+  /** Delete fal.ai API key */
+  async deleteFalApiKey(): Promise<boolean> {
+    return this.delete({ type: 'fal_api_key' });
+  }
+
   /** Get workspace MCP OAuth credentials */
   async getWorkspaceOAuth(workspaceId: string): Promise<{
     accessToken: string;

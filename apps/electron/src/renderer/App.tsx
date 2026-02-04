@@ -1201,6 +1201,13 @@ export default function App() {
     onboarding.handleCancel()
   }, [onboarding])
 
+  // Get active workspace root path (for handoff file paths)
+  const activeWorkspaceRootPath = useMemo(() => {
+    if (!windowWorkspaceId) return null
+    const workspace = workspaces.find(w => w.id === windowWorkspaceId)
+    return workspace?.rootPath ?? null
+  }, [workspaces, windowWorkspaceId])
+
   // Build context value for AppShell component
   // This is memoized to prevent unnecessary re-renders
   // IMPORTANT: Must be before early returns to maintain consistent hook order
@@ -1367,6 +1374,7 @@ export default function App() {
         <TooltipProvider>
         <NavigationProvider
           workspaceId={windowWorkspaceId}
+          workspaceRootPath={activeWorkspaceRootPath}
           onCreateSession={handleCreateSession}
           onInputChange={handleInputChange}
           isReady={appState === 'ready'}

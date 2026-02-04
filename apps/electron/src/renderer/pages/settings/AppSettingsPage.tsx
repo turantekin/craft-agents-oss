@@ -78,6 +78,13 @@ export default function AppSettingsPage() {
   const [geminiKeySaving, setGeminiKeySaving] = useState(false)
   const [geminiKeySaved, setGeminiKeySaved] = useState(false)
 
+  // fal.ai API key state (for image generation models)
+  const [falKey, setFalKey] = useState('')
+  const [falKeyInput, setFalKeyInput] = useState('')
+  const [showFalKey, setShowFalKey] = useState(false)
+  const [falKeySaving, setFalKeySaving] = useState(false)
+  const [falKeySaved, setFalKeySaved] = useState(false)
+
   // Auto-update state
   const updateChecker = useUpdateChecker()
   const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false)
@@ -95,12 +102,13 @@ export default function AppSettingsPage() {
   const loadConnectionInfo = useCallback(async () => {
     if (!window.electronAPI) return
     try {
-      const [billing, notificationsOn, openAIApiKey, perplexityApiKey, geminiApiKey] = await Promise.all([
+      const [billing, notificationsOn, openAIApiKey, perplexityApiKey, geminiApiKey, falApiKey] = await Promise.all([
         window.electronAPI.getApiSetup(),
         window.electronAPI.getNotificationsEnabled(),
         window.electronAPI.getOpenAIKey(),
         window.electronAPI.getPerplexityKey(),
         window.electronAPI.getGeminiKey(),
+        window.electronAPI.getFalKey(),
       ])
       setAuthType(billing.authType)
       setHasCredential(billing.hasCredential)
@@ -116,6 +124,10 @@ export default function AppSettingsPage() {
       if (geminiApiKey) {
         setGeminiKey(geminiApiKey)
         setGeminiKeyInput(geminiApiKey)
+      }
+      if (falApiKey) {
+        setFalKey(falApiKey)
+        setFalKeyInput(falApiKey)
       }
     } catch (error) {
       console.error('Failed to load settings:', error)
@@ -243,6 +255,33 @@ export default function AppSettingsPage() {
       setGeminiKeyInput('')
     } catch (error) {
       console.error('Failed to delete Gemini key:', error)
+    }
+  }, [])
+
+  // Save fal.ai API key
+  const handleSaveFalKey = useCallback(async () => {
+    if (!falKeyInput.trim()) return
+    setFalKeySaving(true)
+    try {
+      await window.electronAPI.setFalKey(falKeyInput.trim())
+      setFalKey(falKeyInput.trim())
+      setFalKeySaved(true)
+      setTimeout(() => setFalKeySaved(false), 2000)
+    } catch (error) {
+      console.error('Failed to save fal.ai key:', error)
+    } finally {
+      setFalKeySaving(false)
+    }
+  }, [falKeyInput])
+
+  // Delete fal.ai API key
+  const handleDeleteFalKey = useCallback(async () => {
+    try {
+      await window.electronAPI.deleteFalKey()
+      setFalKey('')
+      setFalKeyInput('')
+    } catch (error) {
+      console.error('Failed to delete fal.ai key:', error)
     }
   }, [])
 
@@ -448,6 +487,61 @@ export default function AppSettingsPage() {
                         variant="ghost"
                         size="sm"
                         onClick={handleDeleteGeminiKey}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                </SettingsRow>
+
+                {/* fal.ai API Key */}
+                <SettingsRow
+                  label="fal.ai API Key"
+                  description="Used for AI image generation (Ideogram, Imagen, Reve). Get your key from fal.ai/dashboard/keys"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Input
+                        type={showFalKey ? 'text' : 'password'}
+                        value={falKeyInput}
+                        onChange={(e) => setFalKeyInput(e.target.value)}
+                        placeholder="fal-..."
+                        className="w-[280px] pr-8 font-mono text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowFalKey(!showFalKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showFalKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSaveFalKey}
+                      disabled={!falKeyInput.trim() || falKeyInput === falKey || falKeySaving}
+                    >
+                      {falKeySaved ? (
+                        <>
+                          <Check className="h-4 w-4 mr-1" />
+                          Saved
+                        </>
+                      ) : falKeySaving ? (
+                        <>
+                          <Spinner className="mr-1" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save'
+                      )}
+                    </Button>
+                    {falKey && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleDeleteFalKey}
                         className="text-destructive hover:text-destructive"
                       >
                         Remove

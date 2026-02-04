@@ -23,6 +23,7 @@ export type CredentialType =
   | 'openai_api_key'     // OpenAI API key (for Whisper voice transcription)
   | 'perplexity_api_key' // Perplexity API key (for web search delegation)
   | 'gemini_api_key'     // Google Gemini API key (for large context analysis)
+  | 'fal_api_key'        // fal.ai API key (for image generation models)
   // Workspace credentials
   | 'workspace_oauth'    // Workspace MCP OAuth token
   // Source credentials (stored at ~/.craft-agent/workspaces/{ws}/sources/{slug}/)
@@ -38,6 +39,7 @@ const VALID_CREDENTIAL_TYPES: readonly CredentialType[] = [
   'openai_api_key',
   'perplexity_api_key',
   'gemini_api_key',
+  'fal_api_key',
   'workspace_oauth',
   'source_oauth',
   'source_bearer',

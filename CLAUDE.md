@@ -58,12 +58,13 @@ Core business logic. See `packages/shared/CLAUDE.md` for details.
 - **CraftAgent** (`src/agent/`): Wraps Claude Agent SDK, handles MCP connections, tool permissions
 - **Permission Modes**: `safe` (read-only), `ask` (prompt for approval), `allow-all` (auto-approve)
 - **Config** (`src/config/`): Storage, preferences, themes at `~/.craft-agent/`
-- **Credentials** (`src/credentials/`): AES-256-GCM encrypted storage for API keys (Anthropic, OpenAI, Perplexity, Gemini)
+- **Credentials** (`src/credentials/`): AES-256-GCM encrypted storage for API keys (Anthropic, OpenAI, Perplexity, Gemini, fal.ai)
 - **Sessions** (`src/sessions/`): Persistence with debounced writes
 - **Sources** (`src/sources/`): MCP servers, REST APIs, local filesystems
 - **Labels** (`src/labels/`): Session tagging with regex auto-rules and AI classification
 - **Skills** (`src/skills/`): Markdown-based workflows with metadata, preferences, required permission modes, knowledge sources, and inter-skill handoffs
 - **Delegation Tools** (`src/agent/delegation-tools.ts`): Global MCP tools to delegate tasks to Perplexity (web search), Gemini (large context), and OpenAI (reasoning)
+- **Image Generation** (`src/agent/image-models.ts`, `src/agent/session-scoped-tools.ts`): Multi-model image generation via fal.ai and Google direct APIs
 
 ### `@craft-agent/core` (packages/core)
 Type definitions only. See `packages/core/CLAUDE.md` for details.
@@ -102,7 +103,7 @@ import type { Session, Message } from '@craft-agent/core';
 ### Configuration Storage
 All config at `~/.craft-agent/`:
 - `config.json` - Main config (workspaces, auth)
-- `credentials.enc` - Encrypted credentials (API keys for Anthropic, OpenAI, Perplexity, Gemini)
+- `credentials.enc` - Encrypted credentials (API keys for Anthropic, OpenAI, Perplexity, Gemini, fal.ai)
 - `workspaces/{id}/` - Per-workspace data:
   - `sessions/` - Session files
   - `sources/` - MCP server configs
@@ -174,6 +175,31 @@ Global MCP tools that delegate to external AI services:
 | `openai_analyze` | OpenAI | Advanced reasoning (o3, o4-mini, gpt-4.1) |
 
 API keys configured in Settings > App > Integrations.
+
+### Image Generation
+Unified image generation via fal.ai and Google direct APIs (`packages/shared/src/agent/image-models.ts`):
+
+| Model ID | Provider | Cost | Best For |
+|----------|----------|------|----------|
+| `ideogram-v3-turbo` | fal.ai | $0.03 | Fast text-heavy posts |
+| `ideogram-v3-balanced` | fal.ai | $0.06 | Text-heavy posts (DEFAULT) |
+| `ideogram-v3-quality` | fal.ai | $0.09 | Premium text rendering |
+| `imagen-4-standard` | fal.ai | $0.04 | Visual posts, products |
+| `imagen-4-ultra` | fal.ai | $0.06 | Premium visuals |
+| `reve` | fal.ai | $0.04 | Quick drafts, iterations |
+| `gemini-fal` | fal.ai | $0.15 | Complex scenes (via fal) |
+| `gemini-direct` | Google | ~$0.13 | Complex scenes (direct API) |
+
+**Tools:**
+- `generate_image` - Unified tool with model selection parameter
+- `gemini_generate_image` - Legacy tool for backwards compatibility
+- `open_images_folder` - Opens session images folder in file manager
+
+**Key Implementation Notes:**
+- fal.ai uses `Authorization: Key {apiKey}` header
+- Ideogram models use `rendering_speed` parameter (TURBO/BALANCED/QUALITY)
+- `expand_prompt` is set to `false` to avoid double billing (MagicPrompt charges separately)
+- Images saved to `~/.craft-agent/workspaces/{id}/sessions/{sessionId}/images/`
 
 ### Skills with Required Modes
 Skills can specify a `requiredMode` in their frontmatter:
@@ -290,7 +316,8 @@ These are stored encrypted in `credentials.enc`, not in `.env`:
 - **Anthropic API Key**: Primary Claude access (or OAuth for Max subscribers)
 - **OpenAI API Key**: Whisper voice transcription + delegation tool
 - **Perplexity API Key**: Web search delegation
-- **Gemini API Key**: Large context analysis delegation
+- **Gemini API Key**: Large context analysis delegation + direct image generation
+- **fal.ai API Key**: Multi-model image generation (Ideogram, Imagen, Reve, Gemini via fal)
 
 ## Guidelines
 

@@ -63,6 +63,17 @@ import { inferGoogleServiceFromUrl, inferSlackServiceFromUrl, inferMicrosoftServ
 import { buildAuthorizationHeader } from '../sources/api-tools.ts';
 import { DOC_REFS } from '../docs/index.ts';
 import { renderMermaid } from '@craft-agent/mermaid';
+import {
+  IMAGE_MODELS,
+  IMAGE_MODEL_IDS,
+  DEFAULT_MODEL,
+  getImageModel,
+  formatModelList,
+  formatModelsByUseCase,
+  mapAspectRatioToIdeogram,
+  type ImageModel,
+  type ImageModelId,
+} from './image-models.ts';
 
 // ============================================================
 // Session-Scoped Tool Callbacks
@@ -2003,7 +2014,222 @@ Returns validation result with specific error messages if invalid.`,
 }
 
 // ============================================================
-// Gemini Image Generation Tool
+// fal.ai Image Generation
+// ============================================================
+
+/**
+ * fal.ai API response structure (common across models)
+ */
+interface FalImageResponse {
+  images: Array<{
+    url: string;
+    content_type?: string;
+    width?: number;
+    height?: number;
+  }>;
+  seed?: number;
+  description?: string;
+}
+
+/**
+ * Generate an image using fal.ai API.
+ * Supports multiple models: Ideogram V3, Imagen 4, Reve, Gemini via fal.ai
+ */
+async function generateWithFal(
+  prompt: string,
+  model: ImageModel,
+  aspectRatio: string,
+  filename: string | undefined,
+  sessionId: string,
+  workspaceRootPath: string
+): Promise<{
+  success: boolean;
+  imagePath?: string;
+  filename?: string;
+  error?: string;
+  cost: number;
+  model: string;
+}> {
+  const manager = getCredentialManager();
+  const apiKey = await manager.getFalApiKey();
+
+  if (!apiKey) {
+    return {
+      success: false,
+      error: 'fal.ai API key not configured. Ask the user to add their fal.ai API key in Settings > App > Integrations.',
+      cost: 0,
+      model: model.id,
+    };
+  }
+
+  if (!model.falEndpoint) {
+    return {
+      success: false,
+      error: `Model ${model.id} does not have a fal.ai endpoint configured.`,
+      cost: 0,
+      model: model.id,
+    };
+  }
+
+  debug(`[generateWithFal] Generating with ${model.id}: ${prompt.substring(0, 100)}...`);
+
+  // Build request body based on model type
+  let requestBody: Record<string, unknown>;
+
+  if (model.falEndpoint.includes('ideogram')) {
+    // Ideogram V3 uses image_size and rendering_speed
+    // NOTE: expand_prompt (MagicPrompt) is set to false to avoid double billing
+    // When expand_prompt is true, fal.ai charges for both prompt expansion AND image generation
+    requestBody = {
+      prompt,
+      image_size: mapAspectRatioToIdeogram(aspectRatio),
+      num_images: 1,
+      expand_prompt: false,
+      ...model.falParams,
+    };
+  } else if (model.falEndpoint.includes('reve')) {
+    // Reve uses aspect_ratio directly
+    requestBody = {
+      prompt,
+      aspect_ratio: aspectRatio,
+      num_images: 1,
+      output_format: 'png',
+    };
+  } else {
+    // Imagen 4 and Gemini via fal use aspect_ratio
+    requestBody = {
+      prompt,
+      aspect_ratio: aspectRatio,
+      num_images: 1,
+      output_format: 'png',
+    };
+  }
+
+  try {
+    const response = await fetch(
+      `https://fal.run/${model.falEndpoint}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Key ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      debug(`[generateWithFal] API error: ${response.status} - ${errorText}`);
+
+      if (response.status === 401 || response.status === 403) {
+        return {
+          success: false,
+          error: 'fal.ai API key is invalid or lacks permissions. Check your API key in Settings > App > Integrations.',
+          cost: 0,
+          model: model.id,
+        };
+      }
+
+      if (response.status === 429) {
+        return {
+          success: false,
+          error: 'fal.ai rate limit exceeded. Please wait a moment and try again.',
+          cost: 0,
+          model: model.id,
+        };
+      }
+
+      // Try to parse error message
+      try {
+        const errorJson = JSON.parse(errorText);
+        const errorMessage = errorJson.detail || errorJson.error?.message || errorText;
+        return {
+          success: false,
+          error: `fal.ai error: ${errorMessage}`,
+          cost: 0,
+          model: model.id,
+        };
+      } catch {
+        return {
+          success: false,
+          error: `fal.ai API error (${response.status}): ${errorText}`,
+          cost: 0,
+          model: model.id,
+        };
+      }
+    }
+
+    const data = await response.json() as FalImageResponse;
+    const firstImage = data.images?.[0];
+
+    if (!firstImage?.url) {
+      return {
+        success: false,
+        error: 'No image was generated. The model may have declined the request.',
+        cost: 0,
+        model: model.id,
+      };
+    }
+
+    // Download the image from the URL
+    const imageUrl = firstImage.url;
+    debug(`[generateWithFal] Downloading image from: ${imageUrl}`);
+
+    const imageResponse = await fetch(imageUrl);
+    if (!imageResponse.ok) {
+      return {
+        success: false,
+        error: `Failed to download generated image: ${imageResponse.status}`,
+        cost: model.cost,
+        model: model.id,
+      };
+    }
+
+    const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+
+    // Determine extension from content type or URL
+    const contentType = firstImage.content_type || imageResponse.headers.get('content-type') || 'image/png';
+    const extension = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';
+
+    // Generate filename
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    let baseFilename = filename || `image-${timestamp}`;
+    baseFilename = baseFilename.replace(/\.(png|jpg|jpeg|webp|gif)$/i, '');
+    const imageFilename = `${baseFilename}.${extension}`;
+
+    // Create images directory in session folder
+    const sessionPath = getSessionPath(workspaceRootPath, sessionId);
+    const imagesDir = join(sessionPath, 'images');
+    mkdirSync(imagesDir, { recursive: true });
+
+    // Save the image
+    const imagePath = join(imagesDir, imageFilename);
+    writeFileSync(imagePath, imageBuffer);
+
+    debug(`[generateWithFal] Image saved to: ${imagePath}`);
+
+    return {
+      success: true,
+      imagePath,
+      filename: imageFilename,
+      cost: model.cost,
+      model: model.id,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    debug(`[generateWithFal] Error: ${message}`);
+    return {
+      success: false,
+      error: `fal.ai generation failed: ${message}`,
+      cost: 0,
+      model: model.id,
+    };
+  }
+}
+
+// ============================================================
+// Gemini Image Generation Tool (Direct Google API)
 // ============================================================
 
 /**
@@ -2328,6 +2554,252 @@ The images folder is located at: ~/.craft-agent/workspaces/{workspace}/sessions/
 }
 
 // ============================================================
+// Unified Image Generation Tool
+// ============================================================
+
+/**
+ * Create a session-scoped generate_image tool.
+ * Unified tool that supports multiple image generation models via fal.ai and direct Google API.
+ */
+export function createUnifiedImageTool(sessionId: string, workspaceRootPath: string) {
+  // Build model list for description
+  const modelListForDescription = formatModelsByUseCase();
+
+  return tool(
+    'generate_image',
+    `Generate an image using various AI models. Supports multiple providers and quality tiers.
+
+**Available Models:**
+${modelListForDescription}
+
+**Default:** ${DEFAULT_MODEL} (best balance of quality and cost for most use cases)
+
+**Model Selection Guide:**
+- Text-heavy posts (quotes, announcements, CTAs): Use ideogram models
+- Visual posts (products, lifestyle, photos): Use imagen models
+- Quick drafts/iterations: Use reve (cheapest)
+- Complex scenes/illustrations: Use gemini-direct
+
+**Aspect Ratios:**
+- 1:1 (square) - Instagram feed, LinkedIn
+- 16:9 (landscape) - Twitter, YouTube thumbnails
+- 9:16 (portrait) - Instagram Stories, TikTok
+- 4:3 / 3:4 - Standard photo ratios
+
+**IMPORTANT:** Always show the cost estimate to the user before AND after generating images.
+
+The generated image will be saved to the session's images folder and can be displayed inline.`,
+    {
+      prompt: z.string().describe('Detailed image prompt describing the desired image. Be specific about style, lighting, composition, and mood.'),
+      model: z.enum(IMAGE_MODEL_IDS as [string, ...string[]])
+        .optional()
+        .describe(`Model to use for generation. Default: ${DEFAULT_MODEL}`),
+      aspect_ratio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4'])
+        .optional()
+        .describe('Image aspect ratio. Default: 1:1 (square)'),
+      filename: z.string()
+        .optional()
+        .describe('Optional filename (without extension) for the saved image. Default: auto-generated timestamp'),
+    },
+    async (args) => {
+      const { prompt, model: modelId = DEFAULT_MODEL, aspect_ratio = '1:1', filename } = args;
+      const model = getImageModel(modelId);
+
+      if (!model) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Unknown model: ${modelId}. Available models: ${IMAGE_MODEL_IDS.join(', ')}`,
+          }],
+          isError: true,
+        };
+      }
+
+      debug(`[generate_image] Generating with ${model.id} (${model.provider}): ${prompt.substring(0, 100)}...`);
+
+      // Route to appropriate provider
+      if (model.provider === 'fal') {
+        // Use fal.ai for this model
+        const result = await generateWithFal(prompt, model, aspect_ratio, filename, sessionId, workspaceRootPath);
+
+        if (!result.success) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: result.error || 'Image generation failed',
+            }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              success: true,
+              imagePath: result.imagePath,
+              filename: result.filename,
+              aspectRatio: aspect_ratio,
+              prompt: prompt.substring(0, 200) + (prompt.length > 200 ? '...' : ''),
+              displayMarkdown: `![Generated Image](${result.imagePath})`,
+              cost: {
+                estimated: result.cost,
+                currency: 'USD',
+                model: model.id,
+                modelName: model.name,
+                provider: 'fal.ai',
+              },
+            }, null, 2),
+          }],
+        };
+      } else {
+        // Use direct Google API for gemini-direct
+        // This reuses the existing Gemini direct implementation logic
+        const manager = getCredentialManager();
+        const apiKey = await manager.getGeminiApiKey();
+
+        if (!apiKey) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: 'Gemini API key not configured. Ask the user to add their Google Gemini API key in Settings > App > Integrations.',
+            }],
+            isError: true,
+          };
+        }
+
+        try {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    parts: [
+                      {
+                        text: prompt,
+                      },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  responseModalities: ['TEXT', 'IMAGE'],
+                },
+              }),
+            }
+          );
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            debug(`[generate_image] Gemini API error: ${response.status} - ${errorText}`);
+
+            if (response.status === 401 || response.status === 403) {
+              return {
+                content: [{
+                  type: 'text' as const,
+                  text: 'Gemini API key is invalid or lacks permissions. Check your API key in Settings > App > Integrations.',
+                }],
+                isError: true,
+              };
+            }
+
+            if (response.status === 429) {
+              return {
+                content: [{
+                  type: 'text' as const,
+                  text: 'Gemini API rate limit exceeded. Please wait a moment and try again.',
+                }],
+                isError: true,
+              };
+            }
+
+            return {
+              content: [{
+                type: 'text' as const,
+                text: `Gemini API error (${response.status}): ${errorText}`,
+              }],
+              isError: true,
+            };
+          }
+
+          const data = await response.json() as GeminiImageResponse;
+          const imagePart = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+
+          if (!imagePart?.inlineData) {
+            const textPart = data.candidates?.[0]?.content?.parts?.find(p => p.text);
+            const explanation = textPart?.text || 'No image was generated.';
+            return {
+              content: [{
+                type: 'text' as const,
+                text: `Image generation failed: ${explanation}`,
+              }],
+              isError: true,
+            };
+          }
+
+          const base64Data = imagePart.inlineData.data;
+          const mimeType = imagePart.inlineData.mimeType;
+          const extension = mimeType === 'image/png' ? 'png' : mimeType === 'image/jpeg' ? 'jpg' : 'png';
+
+          // Generate filename
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          let baseFilename = filename || `image-${timestamp}`;
+          baseFilename = baseFilename.replace(/\.(png|jpg|jpeg|webp|gif)$/i, '');
+          const imageFilename = `${baseFilename}.${extension}`;
+
+          // Create images directory
+          const sessionPath = getSessionPath(workspaceRootPath, sessionId);
+          const imagesDir = join(sessionPath, 'images');
+          mkdirSync(imagesDir, { recursive: true });
+
+          // Save the image
+          const imagePath = join(imagesDir, imageFilename);
+          writeFileSync(imagePath, Buffer.from(base64Data, 'base64'));
+
+          debug(`[generate_image] Image saved to: ${imagePath}`);
+
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                success: true,
+                imagePath,
+                filename: imageFilename,
+                aspectRatio: aspect_ratio,
+                prompt: prompt.substring(0, 200) + (prompt.length > 200 ? '...' : ''),
+                displayMarkdown: `![Generated Image](${imagePath})`,
+                cost: {
+                  estimated: model.cost,
+                  currency: 'USD',
+                  model: model.id,
+                  modelName: model.name,
+                  provider: 'Google Direct',
+                  note: 'Cost varies by resolution: ~$0.13 (1K/2K) or ~$0.24 (4K)',
+                },
+              }, null, 2),
+            }],
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          debug(`[generate_image] Gemini error: ${message}`);
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `Image generation failed: ${message}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    }
+  );
+}
+
+// ============================================================
 // Session-Scoped Tools Provider
 // ============================================================
 
@@ -2368,8 +2840,9 @@ export function getSessionScopedTools(sessionId: string, workspaceRootPath: stri
         createSlackOAuthTriggerTool(sessionId, workspaceRootPath),
         createMicrosoftOAuthTriggerTool(sessionId, workspaceRootPath),
         createCredentialPromptTool(sessionId, workspaceRootPath),
-        // Image generation tool (saves to session folder)
-        createGeminiImageTool(sessionId, workspaceRootPath),
+        // Image generation tools (saves to session folder)
+        createUnifiedImageTool(sessionId, workspaceRootPath),  // New unified tool with model selection
+        createGeminiImageTool(sessionId, workspaceRootPath),   // Legacy tool for backwards compatibility
         // Open images folder tool
         createOpenImagesFolderTool(sessionId, workspaceRootPath),
       ],
