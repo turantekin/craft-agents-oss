@@ -66,6 +66,7 @@ Sentry.setUser({ id: machineId })
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { SessionManager } from './sessions'
+import { SchedulerService } from './scheduler-service'
 import { registerIpcHandlers } from './ipc'
 import { createApplicationMenu } from './menu'
 import { WindowManager } from './window-manager'
@@ -98,6 +99,7 @@ const DEEPLINK_SCHEME = process.env.CRAFT_DEEPLINK_SCHEME || 'craftagents'
 
 let windowManager: WindowManager | null = null
 let sessionManager: SessionManager | null = null
+let schedulerService: SchedulerService | null = null
 
 // Store pending deep link if app not ready yet (cold start)
 let pendingDeepLink: string | null = null
@@ -273,6 +275,11 @@ app.whenReady().then(async () => {
     // Initialize auth (must happen after window creation for error reporting)
     await sessionManager.initialize()
 
+    // Initialize and start scheduler service (for scheduled sessions)
+    schedulerService = new SchedulerService()
+    await schedulerService.initialize(sessionManager, windowManager)
+    schedulerService.start()
+
     // Set Sentry context tags for error grouping (no PII — just config classification).
     // Runs after init so config and auth state are available.
     try {
@@ -379,6 +386,11 @@ app.on('before-quit', async (event) => {
     // Clean up SessionManager resources (file watchers, timers, etc.)
     sessionManager.cleanup()
 
+    // Clean up SchedulerService (timers)
+    if (schedulerService) {
+      schedulerService.cleanup()
+    }
+
     // If update is in progress, let electron-updater handle the quit flow
     // Force exit breaks the NSIS installer on Windows
     if (isUpdating()) {
@@ -403,3 +415,8 @@ process.on('unhandledRejection', (reason, promise) => {
   mainLog.error('Unhandled rejection at:', promise, 'reason:', reason)
   Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)))
 })
+
+// Export getter for scheduler service (used by IPC handlers)
+export function getSchedulerService(): SchedulerService | null {
+  return schedulerService
+}

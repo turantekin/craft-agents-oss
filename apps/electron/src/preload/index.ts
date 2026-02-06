@@ -68,6 +68,10 @@ const api: ElectronAPI = {
   readFileAttachment: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.READ_FILE_ATTACHMENT, path),
   storeAttachment: (sessionId: string, attachment: FileAttachment) => ipcRenderer.invoke(IPC_CHANNELS.STORE_ATTACHMENT, sessionId, attachment),
   generateThumbnail: (base64: string, mimeType: string) => ipcRenderer.invoke(IPC_CHANNELS.GENERATE_THUMBNAIL, base64, mimeType),
+  saveFileDialog: (sourcePath: string, defaultFileName?: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SAVE_FILE_DIALOG, sourcePath, defaultFileName),
+  uploadToGoogleDrive: (workspaceId: string, sourceSlug: string, filePath: string, fileName?: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.UPLOAD_TO_GOOGLE_DRIVE, workspaceId, sourceSlug, filePath, fileName),
 
   // Theme
   getSystemTheme: () => ipcRenderer.invoke(IPC_CHANNELS.GET_SYSTEM_THEME),
@@ -491,6 +495,46 @@ const api: ElectronAPI = {
   // Voice transcription (OpenAI Whisper)
   voiceTranscribe: (audioBase64: string, mimeType: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.VOICE_TRANSCRIBE, audioBase64, mimeType),
+
+  // Schedule management
+  listSchedules: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCHEDULES_LIST, workspaceId),
+  getSchedule: (workspaceId: string, scheduleId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCHEDULE_GET, workspaceId, scheduleId),
+  createSchedule: (workspaceId: string, input: any) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCHEDULE_CREATE, workspaceId, input),
+  updateSchedule: (workspaceId: string, scheduleId: string, updates: any) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCHEDULE_UPDATE, workspaceId, scheduleId, updates),
+  deleteSchedule: (workspaceId: string, scheduleId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCHEDULE_DELETE, workspaceId, scheduleId),
+  pauseSchedule: (workspaceId: string, scheduleId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCHEDULE_PAUSE, workspaceId, scheduleId),
+  resumeSchedule: (workspaceId: string, scheduleId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCHEDULE_RESUME, workspaceId, scheduleId),
+  runScheduleNow: (workspaceId: string, scheduleId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCHEDULE_RUN_NOW, workspaceId, scheduleId),
+
+  // Schedule change listener (live updates when schedules config changes)
+  onSchedulesChanged: (callback: (workspaceId: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, workspaceId: string) => {
+      callback(workspaceId)
+    }
+    ipcRenderer.on(IPC_CHANNELS.SCHEDULES_CHANGED, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.SCHEDULES_CHANGED, handler)
+    }
+  },
+
+  // Schedule execution listener (notified when a schedule completes)
+  onScheduleExecuted: (callback: (data: { workspaceId: string; scheduleId: string; sessionId: string; success: boolean }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { workspaceId: string; scheduleId: string; sessionId: string; success: boolean }) => {
+      callback(data)
+    }
+    ipcRenderer.on(IPC_CHANNELS.SCHEDULE_EXECUTED, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.SCHEDULE_EXECUTED, handler)
+    }
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

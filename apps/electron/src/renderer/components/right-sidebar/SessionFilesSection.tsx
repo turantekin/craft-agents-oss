@@ -16,11 +16,20 @@
 import * as React from 'react'
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
-import { File, Folder, FolderOpen, FileText, Image, FileCode, ChevronRight } from 'lucide-react'
+import { File, Folder, FolderOpen, FileText, Image, FileCode, ChevronRight, MoreHorizontal, Download, CloudUpload } from 'lucide-react'
+import { useAtomValue } from 'jotai'
+import { toast } from 'sonner'
 import type { SessionFile } from '../../../shared/types'
 import { cn } from '@/lib/utils'
 import * as storage from '@/lib/local-storage'
 import { useAppShellContext } from '@/context/AppShellContext'
+import { sourcesAtom } from '@/atoms/sources'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  StyledDropdownMenuContent,
+  StyledDropdownMenuItem,
+} from '@/components/ui/styled-dropdown'
 
 /**
  * Stagger animation variants for child items - matches LeftSidebar pattern
@@ -180,6 +189,8 @@ interface FileTreeItemProps {
   onToggleExpand: (path: string) => void
   onFileClick: (file: SessionFile) => void
   onFileDoubleClick: (file: SessionFile) => void
+  onSaveAs: (file: SessionFile) => void
+  onSaveToGoogleDrive?: (file: SessionFile) => void
   /** Whether this item is inside an expanded folder (for stagger animation) */
   isNested?: boolean
 }
@@ -198,11 +209,14 @@ function FileTreeItem({
   onToggleExpand,
   onFileClick,
   onFileDoubleClick,
+  onSaveAs,
+  onSaveToGoogleDrive,
   isNested,
 }: FileTreeItemProps) {
   const isDirectory = file.type === 'directory'
   const isExpanded = expandedPaths.has(file.path)
   const hasChildren = isDirectory && file.children && file.children.length > 0
+  const isFile = file.type === 'file'
 
   const handleClick = () => {
     if (isDirectory && hasChildren) {
@@ -226,51 +240,80 @@ function FileTreeItem({
 
   // The button element for the file/folder item
   const buttonElement = (
-    <button
-      onClick={handleClick}
-      onDoubleClick={handleDoubleClick}
-      className={cn(
-        // Base styles matching LeftSidebar exactly
-        // min-w-0 and overflow-hidden required for truncation to work in grid context
-        "group flex w-full min-w-0 overflow-hidden items-center gap-2 rounded-[6px] py-[5px] text-[13px] select-none outline-none text-left",
-        "focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-        "hover:bg-sidebar-hover transition-colors",
-        // Same padding for all items - nested indentation handled by container
-        "px-2"
-      )}
-      title={`${file.path}\n${file.type === 'file' ? formatFileSize(file.size) : 'Directory'}\n\nClick to ${hasChildren ? 'expand' : 'reveal'}, double-click to open`}
-    >
-      {/* Icon container with hover-revealed chevron for expandable items */}
-      <span className="relative h-3.5 w-3.5 shrink-0 flex items-center justify-center">
-        {hasChildren ? (
-          <>
-            {/* Main icon - hidden on hover */}
-            <span className="absolute inset-0 flex items-center justify-center group-hover:opacity-0 transition-opacity duration-150">
-              {getFileIcon(file, isExpanded)}
-            </span>
-            {/* Toggle chevron - shown on hover */}
-            <span
-              className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150 cursor-pointer"
-              onClick={handleChevronClick}
-            >
-              <ChevronRight
-                className={cn(
-                  "h-3.5 w-3.5 text-muted-foreground transition-transform duration-200",
-                  isExpanded && "rotate-90"
-                )}
-              />
-            </span>
-          </>
-        ) : (
-          /* Non-directory files: show thumbnail preview for previewable types,
-             with cross-fade from icon. Falls back to icon for unsupported types. */
-          <FileThumbnail file={file} />
+    <div className="group flex w-full min-w-0 items-center">
+      <button
+        onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
+        className={cn(
+          // Base styles matching LeftSidebar exactly
+          // min-w-0 and overflow-hidden required for truncation to work in grid context
+          "flex flex-1 min-w-0 overflow-hidden items-center gap-2 rounded-[6px] py-[5px] text-[13px] select-none outline-none text-left",
+          "focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+          "hover:bg-sidebar-hover transition-colors",
+          // Same padding for all items - nested indentation handled by container
+          "px-2"
         )}
-      </span>
+        title={`${file.path}\n${file.type === 'file' ? formatFileSize(file.size) : 'Directory'}\n\nClick to ${hasChildren ? 'expand' : 'reveal'}, double-click to open`}
+      >
+        {/* Icon container with hover-revealed chevron for expandable items */}
+        <span className="relative h-3.5 w-3.5 shrink-0 flex items-center justify-center">
+          {hasChildren ? (
+            <>
+              {/* Main icon - hidden on hover */}
+              <span className="absolute inset-0 flex items-center justify-center group-hover:opacity-0 transition-opacity duration-150">
+                {getFileIcon(file, isExpanded)}
+              </span>
+              {/* Toggle chevron - shown on hover */}
+              <span
+                className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150 cursor-pointer"
+                onClick={handleChevronClick}
+              >
+                <ChevronRight
+                  className={cn(
+                    "h-3.5 w-3.5 text-muted-foreground transition-transform duration-200",
+                    isExpanded && "rotate-90"
+                  )}
+                />
+              </span>
+            </>
+          ) : (
+            /* Non-directory files: show thumbnail preview for previewable types,
+               with cross-fade from icon. Falls back to icon for unsupported types. */
+            <FileThumbnail file={file} />
+          )}
+        </span>
 
-      {/* File/folder name - min-w-0 required for truncate to work in flex container */}
-      <span className="flex-1 min-w-0 truncate">{file.name}</span>
-    </button>
+        {/* File/folder name - min-w-0 required for truncate to work in flex container */}
+        <span className="flex-1 min-w-0 truncate">{file.name}</span>
+      </button>
+
+      {/* Save actions dropdown - only for files (not directories) */}
+      {isFile && (
+        <DropdownMenu modal={true}>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="shrink-0 p-1 rounded-[4px] opacity-0 group-hover:opacity-100 hover:bg-foreground/10 transition-opacity duration-150 outline-none"
+              onClick={(e) => e.stopPropagation()}
+              title="Save options"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <StyledDropdownMenuContent align="end" sideOffset={4}>
+            <StyledDropdownMenuItem onClick={() => onSaveAs(file)}>
+              <Download className="h-3.5 w-3.5 text-muted-foreground" />
+              Save As...
+            </StyledDropdownMenuItem>
+            {onSaveToGoogleDrive && (
+              <StyledDropdownMenuItem onClick={() => onSaveToGoogleDrive(file)}>
+                <CloudUpload className="h-3.5 w-3.5 text-muted-foreground" />
+                Save to Google Drive
+              </StyledDropdownMenuItem>
+            )}
+          </StyledDropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
   )
 
   // Inner content: button and expandable children (wrapped in group/section like LeftSidebar)
@@ -311,6 +354,8 @@ function FileTreeItem({
                         onToggleExpand={onToggleExpand}
                         onFileClick={onFileClick}
                         onFileDoubleClick={onFileDoubleClick}
+                        onSaveAs={onSaveAs}
+                        onSaveToGoogleDrive={onSaveToGoogleDrive}
                         isNested={true}
                       />
                     </motion.div>
@@ -410,7 +455,55 @@ export function SessionFilesSection({ sessionId, className }: SessionFilesSectio
 
   // Use the link interceptor (via context) so file clicks show in-app previews
   // instead of always opening in Finder / default app.
-  const { onOpenFile } = useAppShellContext()
+  const { onOpenFile, activeWorkspaceId } = useAppShellContext()
+
+  // Check if Google Drive source is connected
+  const sources = useAtomValue(sourcesAtom)
+  const googleDriveSource = sources.find(s =>
+    s.config.provider === 'google' &&
+    s.config.api?.googleService === 'drive' &&
+    s.config.isAuthenticated
+  )
+
+  // Save As — show native save dialog and copy file
+  const handleSaveAs = useCallback(async (file: SessionFile) => {
+    try {
+      const result = await window.electronAPI.saveFileDialog(file.path, file.name)
+      if (result.success && result.savedPath) {
+        toast.success(`Saved to ${result.savedPath}`)
+      } else if (result.error) {
+        toast.error(`Failed to save: ${result.error}`)
+      }
+    } catch (error) {
+      toast.error('Failed to save file')
+    }
+  }, [])
+
+  // Save to Google Drive
+  const handleSaveToGoogleDrive = useCallback(async (file: SessionFile) => {
+    if (!activeWorkspaceId || !googleDriveSource) return
+    try {
+      toast.info('Uploading to Google Drive...')
+      const result = await window.electronAPI.uploadToGoogleDrive(
+        activeWorkspaceId,
+        googleDriveSource.config.slug,
+        file.path,
+        file.name
+      )
+      if (result.success) {
+        toast.success('Uploaded to Google Drive', {
+          action: result.url ? {
+            label: 'Open',
+            onClick: () => window.electronAPI.openUrl(result.url!),
+          } : undefined,
+        })
+      } else {
+        toast.error(`Upload failed: ${result.error}`)
+      }
+    } catch (error) {
+      toast.error('Failed to upload to Google Drive')
+    }
+  }, [activeWorkspaceId, googleDriveSource])
 
   // Handle file click — preview in-app if possible, open directory in Finder
   const handleFileClick = useCallback((file: SessionFile) => {
@@ -478,6 +571,8 @@ export function SessionFilesSection({ sessionId, className }: SessionFilesSectio
                 onToggleExpand={handleToggleExpand}
                 onFileClick={handleFileClick}
                 onFileDoubleClick={handleFileDoubleClick}
+                onSaveAs={handleSaveAs}
+                onSaveToGoogleDrive={googleDriveSource ? handleSaveToGoogleDrive : undefined}
               />
             ))}
           </nav>

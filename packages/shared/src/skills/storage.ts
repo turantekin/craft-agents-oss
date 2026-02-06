@@ -433,3 +433,184 @@ export function readKnowledgeSource(workspaceRoot: string, relativePath: string)
     return null;
   }
 }
+
+// ============================================================
+// Lessons System - Learn from past conversations
+// ============================================================
+
+const LESSONS_FILE = 'knowledge/lessons.md';
+
+/**
+ * Get path to the global lessons file
+ */
+export function getLessonsPath(workspaceRoot: string): string {
+  return join(workspaceRoot, LESSONS_FILE);
+}
+
+/**
+ * Load the global lessons file content
+ * @param workspaceRoot - Absolute path to workspace root
+ * @returns Lessons content or null if not found
+ */
+export function loadLessons(workspaceRoot: string): string | null {
+  const lessonsPath = getLessonsPath(workspaceRoot);
+
+  if (!existsSync(lessonsPath)) {
+    return null;
+  }
+
+  try {
+    return readFileSync(lessonsPath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract lessons for a specific skill (or global) from the lessons file
+ * @param lessonsContent - Full content of lessons.md
+ * @param skillName - Name of the skill to extract lessons for (or 'global')
+ * @returns Array of lesson strings
+ */
+export function extractLessonsForSkill(lessonsContent: string, skillName: string): string[] {
+  const lessons: string[] = [];
+  const lines = lessonsContent.split('\n');
+
+  // Normalize skill name for matching (case-insensitive)
+  const normalizedSkillName = skillName.toLowerCase().replace(/[-_\s]/g, '');
+
+  let inTargetSection = false;
+  let inGlobalSection = false;
+
+  for (const line of lines) {
+    // Check for section headers
+    if (line.startsWith('## ')) {
+      const sectionName = line.substring(3).trim().toLowerCase().replace(/[-_\s]/g, '');
+
+      // Check if entering global section
+      if (sectionName.includes('global')) {
+        inGlobalSection = true;
+        inTargetSection = false;
+        continue;
+      }
+
+      // Check if entering target skill section
+      if (sectionName.includes(normalizedSkillName)) {
+        inTargetSection = true;
+        inGlobalSection = false;
+        continue;
+      }
+
+      // Entering a different section
+      inGlobalSection = false;
+      inTargetSection = false;
+      continue;
+    }
+
+    // Extract lessons (lines starting with -)
+    if ((inGlobalSection || inTargetSection) && line.trim().startsWith('- ')) {
+      const lesson = line.trim().substring(2).trim();
+      if (lesson && !lesson.startsWith('<!--')) {
+        lessons.push(lesson);
+      }
+    }
+  }
+
+  return lessons;
+}
+
+/**
+ * Get lessons for a skill, including global lessons
+ * @param workspaceRoot - Absolute path to workspace root
+ * @param skillName - Name of the skill
+ * @returns Object with global and skill-specific lessons
+ */
+export function getLessonsForSkill(
+  workspaceRoot: string,
+  skillName: string
+): { global: string[]; skillSpecific: string[] } {
+  const lessonsContent = loadLessons(workspaceRoot);
+
+  if (!lessonsContent) {
+    return { global: [], skillSpecific: [] };
+  }
+
+  const globalLessons = extractLessonsForSkill(lessonsContent, 'global');
+  const skillLessons = extractLessonsForSkill(lessonsContent, skillName);
+
+  return {
+    global: globalLessons,
+    skillSpecific: skillLessons,
+  };
+}
+
+/**
+ * Format lessons for injection into skill context
+ * @param lessons - Object with global and skill-specific lessons
+ * @param skillName - Name of the skill
+ * @returns Formatted string to inject into skill prompt
+ */
+export function formatLessonsForInjection(
+  lessons: { global: string[]; skillSpecific: string[] },
+  skillName: string
+): string | null {
+  const hasGlobal = lessons.global.length > 0;
+  const hasSkillSpecific = lessons.skillSpecific.length > 0;
+
+  if (!hasGlobal && !hasSkillSpecific) {
+    return null;
+  }
+
+  const parts: string[] = [];
+
+  parts.push('<lessons_learned>');
+  parts.push('## Important: Lessons from Past Conversations');
+  parts.push('');
+  parts.push('These lessons were learned from previous corrections. Apply them to avoid repeating mistakes:');
+  parts.push('');
+
+  if (hasGlobal) {
+    parts.push('### Global Lessons (apply to all conversations)');
+    for (const lesson of lessons.global) {
+      parts.push(`- ${lesson}`);
+    }
+    parts.push('');
+  }
+
+  if (hasSkillSpecific) {
+    parts.push(`### ${skillName} Lessons`);
+    for (const lesson of lessons.skillSpecific) {
+      parts.push(`- ${lesson}`);
+    }
+    parts.push('');
+  }
+
+  parts.push('</lessons_learned>');
+
+  return parts.join('\n');
+}
+
+/**
+ * Load a skill with lessons injected into its content
+ * @param workspaceRoot - Absolute path to workspace root
+ * @param slug - Skill slug
+ * @returns LoadedSkill with lessons injected, or null
+ */
+export function loadSkillWithLessons(workspaceRoot: string, slug: string): LoadedSkill | null {
+  const skill = loadSkill(workspaceRoot, slug);
+
+  if (!skill) {
+    return null;
+  }
+
+  // Get lessons for this skill
+  const lessons = getLessonsForSkill(workspaceRoot, skill.metadata.name);
+  const lessonsBlock = formatLessonsForInjection(lessons, skill.metadata.name);
+
+  // Inject lessons at the beginning of the skill content
+  if (lessonsBlock) {
+    skill.content = `${lessonsBlock}\n\n---\n\n${skill.content}`;
+  }
+
+  return skill;
+}

@@ -65,6 +65,7 @@ Core business logic. See `packages/shared/CLAUDE.md` for details.
 - **Skills** (`src/skills/`): Markdown-based workflows with metadata, preferences, required permission modes, knowledge sources, and inter-skill handoffs
 - **Delegation Tools** (`src/agent/delegation-tools.ts`): Global MCP tools to delegate tasks to Perplexity (web search), Gemini (large context), and OpenAI (reasoning)
 - **Image Generation** (`src/agent/image-models.ts`, `src/agent/session-scoped-tools.ts`): Multi-model image generation via fal.ai and Google direct APIs
+- **Schedules** (`src/schedules/`): Scheduled session execution with once/daily/weekly/monthly/cron frequencies, timezone support, retry with backoff, groups, templates, and auto-pause on failure
 
 ### `@craft-agent/core` (packages/core)
 Type definitions only. See `packages/core/CLAUDE.md` for details.
@@ -80,6 +81,7 @@ Type definitions only. See `packages/core/CLAUDE.md` for details.
 - `sessions.ts`: Session management
 - `window-manager.ts`: Window lifecycle
 - `deep-link.ts`: `craftagents://` URL handling
+- `scheduler-service.ts`: Schedule timer management and execution
 
 ### Renderer (`apps/electron/src/renderer/`)
 - **Atoms** (`atoms/`): Jotai state management
@@ -114,6 +116,7 @@ All config at `~/.craft-agent/`:
   - `styles/` - Visual style libraries (e.g., `image-styles.json`)
   - `statuses/` - Status definitions
   - `labels/config.json` - Label tree with auto-rules and AI classification
+  - `schedules/config.json` - Schedule definitions and execution history
 
 ### MCP Auth Separation
 **Critical**: Craft OAuth (`craft_oauth::global`) is ONLY for Craft API. Each MCP server has its own OAuth via `workspace_oauth::{workspaceId}`.
@@ -133,6 +136,10 @@ External apps can navigate using `craftagents://` URLs:
 - `craftagents://action/new-chat` - Create new chat
 - `craftagents://action/new-chat?skill={skillId}` - New chat with skill
 - `craftagents://action/new-chat?skill={skillId}&handoff={handoffId}` - New chat with skill and handoff context
+- `craftagents://action/new-schedule` - Open schedule creator
+- `craftagents://action/new-schedule?skill={skillId}` - Schedule creator pre-filled with skill
+- `craftagents://schedules` - Schedules list
+- `craftagents://schedules/schedule/{scheduleId}` - Specific schedule
 
 ### Local MCP Server Security
 When spawning local MCP servers (stdio transport), sensitive env vars are filtered out:
@@ -200,6 +207,50 @@ Unified image generation via fal.ai and Google direct APIs (`packages/shared/src
 - Ideogram models use `rendering_speed` parameter (TURBO/BALANCED/QUALITY)
 - `expand_prompt` is set to `false` to avoid double billing (MagicPrompt charges separately)
 - Images saved to `~/.craft-agent/workspaces/{id}/sessions/{sessionId}/images/`
+
+**Advanced Features:**
+- **Style Reference Images**: `style_reference_image` parameter on `generate_image` tool. Supported by Ideogram V3, Reve (up to 6 refs), Gemini. NOT supported by Imagen 4. Local files converted to data URIs for API.
+- **Platform Optimization**: `platform` parameter (linkedin, instagram, twitter, tiktok, facebook). Auto-enhances prompts with platform-specific mood, color, composition, and typography guidelines.
+- **Text Analysis**: `analyzePromptForText()` auto-detects text density (text-free/minimal/moderate/heavy/complex), recommends appropriate model, and warns on model mismatch. `checkModelForText()` validates model suitability.
+
+### File Operations
+Session files panel (right sidebar) supports:
+- **Save As**: Native save dialog to copy generated files to user-chosen location (`SAVE_FILE_DIALOG` IPC)
+- **Upload to Google Drive**: Multipart upload via connected Google Drive source with token refresh (`UPLOAD_TO_GOOGLE_DRIVE` IPC)
+
+### Schedules
+Automated session execution on a schedule. Config stored at `{workspace}/schedules/config.json`.
+
+**Frequencies**: `once`, `daily`, `weekly`, `monthly`, `cron` (5-field POSIX)
+
+**Architecture**:
+- `packages/shared/src/schedules/` — Types, storage CRUD, next-run calculator (browser-safe via `browser.ts`)
+- `apps/electron/src/main/scheduler-service.ts` — Main process timer service using `setTimeout` chains, retry logic
+- `apps/electron/src/renderer/components/schedules/` — Creator/editor dialog, template definitions, list panel, info page
+- `apps/electron/src/renderer/atoms/schedules.ts` — Jotai atoms for schedule state
+
+**Key behaviors**:
+- Timezone-aware scheduling via `Intl.DateTimeFormat` offset calculation, with UI timezone picker (23 IANA zones)
+- Monthly day overflow clamps to last day of month (e.g., day 31 in Feb → 28th)
+- Cron uses POSIX day matching: OR when both day-of-month and day-of-week are restricted, single-field when one is `*`
+- Auto-pauses after 3 consecutive failures (`maxConsecutiveFailures`)
+- Missed schedule detection on app startup
+- Long delays (>24h) use intermediate timer chains to avoid `setTimeout` drift
+- `ConfigWatcher` monitors `schedules/config.json` for external changes
+- IPC broadcasts `SCHEDULE_EXECUTED` and `SCHEDULES_CHANGED` events to renderer
+- Toast notifications on execution (success with "View Session" action, error with schedule name)
+
+**Edit support**: `ScheduleCreator` doubles as editor via `editSchedule` prop. `formDataFromSchedule()` maps a `ScheduleConfig` back to form state. Edit is accessible from the schedule menu, info page quick actions, and list panel.
+
+**Dry run preview**: `getNextNRuns(timing, n, after?)` iteratively calls `calculateNextRun` to produce the next N run dates. Shown in the creator's Step 2 (When) and in the schedule info page "Upcoming" row for active schedules.
+
+**Templates**: Pre-built schedule configs in `schedule-templates.ts` (Daily Morning Briefing, Weekday Standup Prep, Weekly Report, Monthly Review, End of Day Summary). Displayed as a 2-column grid in Step 1 when creating (not editing).
+
+**Groups**: Optional `group` string on `ScheduleConfig`. `SchedulesListPanel` groups schedules into collapsible sections with folder icons. `ScheduleCreator` offers existing group names via `<datalist>` autocomplete.
+
+**Retry with backoff**: When `retryOnFailure` is enabled, failed executions retry up to `maxRetries` (default 3) times with delays from `retryDelayMinutes` (default [5, 15, 60]). `SchedulerService` tracks retry state via `retryTimers` and `retryAttempts` maps. History entries include `isRetry` and `retryAttempt` fields.
+
+**Deep link**: `craftagents://action/new-schedule[?skill=X&name=Y]` navigates to schedules view and opens the creator dialog. `NavigationContext` dispatches a `craft:open-schedule-creator` custom event that `AppShell` listens for.
 
 ### Skills with Required Modes
 Skills can specify a `requiredMode` in their frontmatter:

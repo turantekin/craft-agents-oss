@@ -1,5 +1,5 @@
 import { app, ipcMain, nativeTheme, nativeImage, dialog, shell, BrowserWindow } from 'electron'
-import { readFile, readdir, stat, realpath, mkdir, writeFile, unlink, rm } from 'fs/promises'
+import { readFile, readdir, stat, realpath, mkdir, writeFile, unlink, rm, copyFile } from 'fs/promises'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { normalize, isAbsolute, join, basename, dirname, resolve, relative, sep } from 'path'
 import { homedir, tmpdir } from 'os'
@@ -531,6 +531,134 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       await unlink(tempPath).catch(() => {})
       ipcLog.info('generateThumbnail failed:', error instanceof Error ? error.message : error)
       return null
+    }
+  })
+
+  // Save a file to a user-chosen location via native save dialog
+  ipcMain.handle(IPC_CHANNELS.SAVE_FILE_DIALOG, async (_event, sourcePath: string, defaultFileName?: string) => {
+    try {
+      const fileName = defaultFileName || basename(sourcePath)
+      const result = await dialog.showSaveDialog({
+        defaultPath: join(app.getPath('downloads'), fileName),
+        filters: [
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      })
+      if (result.canceled || !result.filePath) {
+        return { success: false }
+      }
+      await copyFile(sourcePath, result.filePath)
+      return { success: true, savedPath: result.filePath }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      ipcLog.error('saveFileDialog error:', message)
+      return { success: false, error: message }
+    }
+  })
+
+  // Upload a file to Google Drive via a connected source
+  ipcMain.handle(IPC_CHANNELS.UPLOAD_TO_GOOGLE_DRIVE, async (_event, workspaceId: string, sourceSlug: string, filePath: string, fileName?: string) => {
+    try {
+      const workspace = getWorkspaceByNameOrId(workspaceId)
+      if (!workspace) {
+        return { success: false, error: 'Workspace not found' }
+      }
+
+      // Load sources and find the Google Drive source
+      const sources = await loadWorkspaceSources(workspace.rootPath)
+      const source = sources.find(s => s.config.slug === sourceSlug)
+      if (!source) {
+        return { success: false, error: `Source '${sourceSlug}' not found` }
+      }
+      if (source.config.provider !== 'google') {
+        return { success: false, error: 'Not a Google source' }
+      }
+
+      // Get token (with refresh if needed)
+      const { getSourceCredentialManager } = await import('@craft-agent/shared/sources')
+      const credMgr = getSourceCredentialManager()
+      const cred = await credMgr.load(source)
+      let token: string | null = null
+
+      if (cred) {
+        if (credMgr.needsRefresh(cred)) {
+          token = await credMgr.refresh(source)
+        } else {
+          token = cred.value || null
+        }
+      }
+
+      if (!token) {
+        return { success: false, error: 'Google Drive not authenticated. Please re-authenticate the source.' }
+      }
+
+      // Read file
+      const fileContent = await readFile(filePath)
+      const name = fileName || basename(filePath)
+
+      // Determine MIME type from extension
+      const ext = name.split('.').pop()?.toLowerCase() || ''
+      const mimeTypes: Record<string, string> = {
+        md: 'text/markdown',
+        txt: 'text/plain',
+        json: 'application/json',
+        pdf: 'application/pdf',
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        gif: 'image/gif',
+        webp: 'image/webp',
+        svg: 'image/svg+xml',
+        html: 'text/html',
+        css: 'text/css',
+        js: 'text/javascript',
+        csv: 'text/csv',
+      }
+      const mimeType = mimeTypes[ext] || 'application/octet-stream'
+
+      // Upload to Google Drive using multipart upload
+      const boundary = `----CraftAgent${Date.now()}`
+      const metadata = JSON.stringify({ name, mimeType })
+
+      const parts = [
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`,
+        `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`,
+      ]
+      const ending = `\r\n--${boundary}--`
+
+      const body = Buffer.concat([
+        Buffer.from(parts[0]),
+        Buffer.from(parts[1]),
+        fileContent,
+        Buffer.from(ending),
+      ])
+
+      const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+          'Content-Length': String(body.length),
+        },
+        body,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        ipcLog.error('Google Drive upload failed:', errorText)
+        return { success: false, error: `Upload failed (${response.status})` }
+      }
+
+      const data = await response.json() as { id: string }
+      return {
+        success: true,
+        fileId: data.id,
+        url: `https://drive.google.com/file/d/${data.id}`,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      ipcLog.error('uploadToGoogleDrive error:', message)
+      return { success: false, error: message }
     }
   })
 
@@ -2708,6 +2836,143 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         error: error instanceof Error ? error.message : 'Transcription failed'
       }
     }
+  })
+
+  // ============================================================
+  // Schedule Management (workspace-scoped)
+  // ============================================================
+
+  // List all schedules for a workspace
+  ipcMain.handle(IPC_CHANNELS.SCHEDULES_LIST, async (_event, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { listSchedules } = await import('@craft-agent/shared/schedules')
+    return listSchedules(workspace.rootPath)
+  })
+
+  // Get a single schedule
+  ipcMain.handle(IPC_CHANNELS.SCHEDULE_GET, async (_event, workspaceId: string, scheduleId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { getSchedule } = await import('@craft-agent/shared/schedules')
+    return getSchedule(workspace.rootPath, scheduleId)
+  })
+
+  // Create a new schedule
+  ipcMain.handle(IPC_CHANNELS.SCHEDULE_CREATE, async (_event, workspaceId: string, input: import('@craft-agent/shared/schedules').CreateScheduleInput) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { createSchedule } = await import('@craft-agent/shared/schedules')
+    const schedule = createSchedule(workspace.rootPath, input)
+
+    // Notify SchedulerService to reload schedules (so "Run Now" works)
+    const { getSchedulerService } = await import('./index')
+    const schedulerService = getSchedulerService()
+    if (schedulerService) {
+      schedulerService.handleScheduleConfigChange(workspace.rootPath, workspaceId)
+    }
+
+    windowManager.broadcastToAll(IPC_CHANNELS.SCHEDULES_CHANGED, workspaceId)
+    return schedule
+  })
+
+  // Update an existing schedule
+  ipcMain.handle(IPC_CHANNELS.SCHEDULE_UPDATE, async (_event, workspaceId: string, scheduleId: string, updates: import('@craft-agent/shared/schedules').UpdateScheduleInput) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { updateSchedule } = await import('@craft-agent/shared/schedules')
+    const schedule = updateSchedule(workspace.rootPath, scheduleId, updates)
+
+    // Notify SchedulerService to reload schedules
+    const { getSchedulerService } = await import('./index')
+    const schedulerService = getSchedulerService()
+    if (schedulerService) {
+      schedulerService.handleScheduleConfigChange(workspace.rootPath, workspaceId)
+    }
+
+    windowManager.broadcastToAll(IPC_CHANNELS.SCHEDULES_CHANGED, workspaceId)
+    return schedule
+  })
+
+  // Delete a schedule
+  ipcMain.handle(IPC_CHANNELS.SCHEDULE_DELETE, async (_event, workspaceId: string, scheduleId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { deleteSchedule } = await import('@craft-agent/shared/schedules')
+    const result = deleteSchedule(workspace.rootPath, scheduleId)
+
+    // Notify SchedulerService to reload schedules
+    const { getSchedulerService } = await import('./index')
+    const schedulerService = getSchedulerService()
+    if (schedulerService) {
+      schedulerService.handleScheduleConfigChange(workspace.rootPath, workspaceId)
+    }
+
+    windowManager.broadcastToAll(IPC_CHANNELS.SCHEDULES_CHANGED, workspaceId)
+    return result
+  })
+
+  // Pause a schedule
+  ipcMain.handle(IPC_CHANNELS.SCHEDULE_PAUSE, async (_event, workspaceId: string, scheduleId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { pauseSchedule } = await import('@craft-agent/shared/schedules')
+    const schedule = pauseSchedule(workspace.rootPath, scheduleId)
+
+    // Notify SchedulerService to reload schedules
+    const { getSchedulerService } = await import('./index')
+    const schedulerService = getSchedulerService()
+    if (schedulerService) {
+      schedulerService.handleScheduleConfigChange(workspace.rootPath, workspaceId)
+    }
+
+    windowManager.broadcastToAll(IPC_CHANNELS.SCHEDULES_CHANGED, workspaceId)
+    return schedule
+  })
+
+  // Resume a schedule
+  ipcMain.handle(IPC_CHANNELS.SCHEDULE_RESUME, async (_event, workspaceId: string, scheduleId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { resumeSchedule } = await import('@craft-agent/shared/schedules')
+    const schedule = resumeSchedule(workspace.rootPath, scheduleId)
+
+    // Notify SchedulerService to reload schedules
+    const { getSchedulerService } = await import('./index')
+    const schedulerService = getSchedulerService()
+    if (schedulerService) {
+      schedulerService.handleScheduleConfigChange(workspace.rootPath, workspaceId)
+    }
+
+    windowManager.broadcastToAll(IPC_CHANNELS.SCHEDULES_CHANGED, workspaceId)
+    return schedule
+  })
+
+  // Run a schedule immediately (manual trigger)
+  ipcMain.handle(IPC_CHANNELS.SCHEDULE_RUN_NOW, async (_event, workspaceId: string, scheduleId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    // Get the scheduler service from main process
+    const { getSchedulerService } = await import('./index')
+    const schedulerService = getSchedulerService()
+    if (!schedulerService) {
+      return {
+        success: false,
+        error: 'Scheduler service not initialized'
+      }
+    }
+
+    // Execute the schedule manually
+    const result = await schedulerService.executeScheduleManually(scheduleId, workspace.rootPath)
+    return result
   })
 
 }

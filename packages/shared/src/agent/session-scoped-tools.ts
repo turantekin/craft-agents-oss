@@ -70,9 +70,22 @@ import {
   getImageModel,
   formatModelList,
   formatModelsByUseCase,
+  formatReferenceCapabilities,
   mapAspectRatioToIdeogram,
+  analyzePromptForText,
+  checkModelForText,
+  enhancePromptForPlatform,
+  getPlatformGuidelines,
+  addTextInstructions,
+  getAspectRatioPrefix,
+  modelSupportsReference,
+  getModelsWithStyleReference,
+  getModelsWithRemix,
+  getModelsWithEdit,
   type ImageModel,
   type ImageModelId,
+  type TextAnalysisResult,
+  type Platform,
 } from './image-models.ts';
 
 // ============================================================
@@ -2032,8 +2045,38 @@ interface FalImageResponse {
 }
 
 /**
+ * Convert a local file path to a data URI for fal.ai API
+ */
+async function fileToDataUri(filePath: string): Promise<string> {
+  const absolutePath = filePath.startsWith('~')
+    ? filePath.replace('~', process.env.HOME || '')
+    : filePath;
+
+  if (!existsSync(absolutePath)) {
+    throw new Error(`File not found: ${absolutePath}`);
+  }
+
+  const fileBuffer = readFileSync(absolutePath);
+  const base64 = fileBuffer.toString('base64');
+
+  // Determine mime type from extension
+  const ext = absolutePath.toLowerCase().split('.').pop();
+  const mimeTypes: Record<string, string> = {
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'webp': 'image/webp',
+    'gif': 'image/gif',
+  };
+  const mimeType = mimeTypes[ext || 'png'] || 'image/png';
+
+  return `data:${mimeType};base64,${base64}`;
+}
+
+/**
  * Generate an image using fal.ai API.
  * Supports multiple models: Ideogram V3, Imagen 4, Reve, Gemini via fal.ai
+ * Now supports style reference images for compatible models.
  */
 async function generateWithFal(
   prompt: string,
@@ -2041,7 +2084,8 @@ async function generateWithFal(
   aspectRatio: string,
   filename: string | undefined,
   sessionId: string,
-  workspaceRootPath: string
+  workspaceRootPath: string,
+  styleReferenceImagePath?: string
 ): Promise<{
   success: boolean;
   imagePath?: string;
@@ -2049,6 +2093,7 @@ async function generateWithFal(
   error?: string;
   cost: number;
   model: string;
+  usedStyleReference?: boolean;
 }> {
   const manager = getCredentialManager();
   const apiKey = await manager.getFalApiKey();
@@ -2071,6 +2116,32 @@ async function generateWithFal(
     };
   }
 
+  // Check if style reference is requested but not supported
+  if (styleReferenceImagePath && !model.referenceCapabilities?.styleReference) {
+    return {
+      success: false,
+      error: `Model ${model.name} does not support style reference. Use one of: Ideogram V3, Reve, or Gemini.`,
+      cost: 0,
+      model: model.id,
+    };
+  }
+
+  // Convert style reference image to data URI if provided
+  let styleReferenceDataUri: string | undefined;
+  if (styleReferenceImagePath) {
+    try {
+      styleReferenceDataUri = await fileToDataUri(styleReferenceImagePath);
+      debug(`[generateWithFal] Using style reference image: ${styleReferenceImagePath}`);
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to read style reference image: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        cost: 0,
+        model: model.id,
+      };
+    }
+  }
+
   debug(`[generateWithFal] Generating with ${model.id}: ${prompt.substring(0, 100)}...`);
 
   // Build request body based on model type
@@ -2087,16 +2158,39 @@ async function generateWithFal(
       expand_prompt: false,
       ...model.falParams,
     };
+
+    // Add style reference for Ideogram (uses image_urls parameter)
+    if (styleReferenceDataUri) {
+      requestBody.image_urls = [styleReferenceDataUri];
+    }
   } else if (model.falEndpoint.includes('reve')) {
-    // Reve uses aspect_ratio directly
+    // Reve uses aspect_ratio directly and supports image_urls for reference
     requestBody = {
       prompt,
       aspect_ratio: aspectRatio,
       num_images: 1,
       output_format: 'png',
     };
+
+    // Add style reference for Reve (uses image_urls parameter, supports up to 6!)
+    if (styleReferenceDataUri) {
+      requestBody.image_urls = [styleReferenceDataUri];
+    }
+  } else if (model.falEndpoint.includes('gemini')) {
+    // Gemini via fal uses aspect_ratio and supports image_urls
+    requestBody = {
+      prompt,
+      aspect_ratio: aspectRatio,
+      num_images: 1,
+      output_format: 'png',
+    };
+
+    // Add style reference for Gemini
+    if (styleReferenceDataUri) {
+      requestBody.image_urls = [styleReferenceDataUri];
+    }
   } else {
-    // Imagen 4 and Gemini via fal use aspect_ratio
+    // Imagen 4 - does NOT support style reference
     requestBody = {
       prompt,
       aspect_ratio: aspectRatio,
@@ -2215,6 +2309,7 @@ async function generateWithFal(
       filename: imageFilename,
       cost: model.cost,
       model: model.id,
+      usedStyleReference: !!styleReferenceImagePath,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -2560,10 +2655,12 @@ The images folder is located at: ~/.craft-agent/workspaces/{workspace}/sessions/
 /**
  * Create a session-scoped generate_image tool.
  * Unified tool that supports multiple image generation models via fal.ai and direct Google API.
+ * Includes automatic text analysis and platform-specific prompt enhancement.
  */
 export function createUnifiedImageTool(sessionId: string, workspaceRootPath: string) {
   // Build model list for description
   const modelListForDescription = formatModelsByUseCase();
+  const referenceCapabilitiesInfo = formatReferenceCapabilities();
 
   return tool(
     'generate_image',
@@ -2579,6 +2676,29 @@ ${modelListForDescription}
 - Visual posts (products, lifestyle, photos): Use imagen models
 - Quick drafts/iterations: Use reve (cheapest)
 - Complex scenes/illustrations: Use gemini-direct
+- HEAVY TEXT (16+ words) or complex text: Use gemini-direct or gemini-fal (REQUIRED for good text rendering)
+
+**STYLE REFERENCE (NEW!):**
+You can pass a reference image to match its style! Use the 'style_reference_image' parameter with a path to an existing image.
+The new image will be generated to match the visual style of the reference.
+
+${referenceCapabilitiesInfo}
+
+**TEXT ANALYSIS:**
+The tool automatically analyzes your prompt for text content:
+- Text-free: No text detected → imagen-4-ultra recommended
+- Minimal (1-5 words): → ideogram-v3-balanced recommended
+- Moderate (6-15 words): → ideogram-v3-quality recommended
+- Heavy (16+ words): → gemini required (WARNING if not selected)
+- Complex (quotes, multi-line): → gemini-direct required
+
+**Platform Support:**
+Pass the 'platform' parameter to automatically apply platform-specific design guidelines:
+- linkedin: Professional, muted colors, minimal text
+- instagram: Vibrant, bold, eye-catching
+- twitter: High-impact, minimal, center-focused
+- tiktok: Bright, vertical, thumbnail-optimized
+- facebook: Warm, community-focused
 
 **Aspect Ratios:**
 - 1:1 (square) - Instagram feed, LinkedIn
@@ -2593,16 +2713,66 @@ The generated image will be saved to the session's images folder and can be disp
       prompt: z.string().describe('Detailed image prompt describing the desired image. Be specific about style, lighting, composition, and mood.'),
       model: z.enum(IMAGE_MODEL_IDS as [string, ...string[]])
         .optional()
-        .describe(`Model to use for generation. Default: ${DEFAULT_MODEL}`),
+        .describe(`Model to use for generation. Default: ${DEFAULT_MODEL}. IMPORTANT: For prompts with 16+ words of text to render, use gemini-direct or gemini-fal.`),
       aspect_ratio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4'])
         .optional()
         .describe('Image aspect ratio. Default: 1:1 (square)'),
+      platform: z.enum(['linkedin', 'instagram', 'twitter', 'tiktok', 'facebook', 'general'])
+        .optional()
+        .describe('Target platform for automatic style optimization. Applies platform-specific colors, mood, and design guidelines to the prompt.'),
       filename: z.string()
         .optional()
         .describe('Optional filename (without extension) for the saved image. Default: auto-generated timestamp'),
+      style_reference_image: z.string()
+        .optional()
+        .describe('Path to an image to use as style reference. The generated image will match this visual style. Supported by: Ideogram V3, Reve (up to 6 refs!), Gemini. NOT supported by: Imagen 4.'),
     },
     async (args) => {
-      const { prompt, model: modelId = DEFAULT_MODEL, aspect_ratio = '1:1', filename } = args;
+      const { prompt: rawPrompt, model: modelId = DEFAULT_MODEL, aspect_ratio = '1:1', platform, filename, style_reference_image } = args;
+
+      // Step 1: Analyze prompt for text content
+      const textAnalysis = analyzePromptForText(rawPrompt);
+      debug(`[generate_image] Text analysis: density=${textAnalysis.density}, words=${textAnalysis.wordCount}, recommended=${textAnalysis.recommendedModel}`);
+
+      // Step 2: Check if selected model is appropriate for text content
+      const modelCheck = checkModelForText(modelId, textAnalysis);
+      let warnings: string[] = [];
+
+      if (!modelCheck.isAppropriate && modelCheck.warning) {
+        warnings.push(modelCheck.warning);
+        debug(`[generate_image] Model warning: ${modelCheck.warning}`);
+      }
+
+      if (textAnalysis.warning) {
+        warnings.push(textAnalysis.warning);
+      }
+
+      // Step 3: Enhance prompt with platform guidelines if specified
+      let enhancedPrompt = rawPrompt;
+      let platformInfo: string | undefined;
+
+      if (platform) {
+        const guidelines = getPlatformGuidelines(platform);
+        enhancedPrompt = enhancePromptForPlatform(rawPrompt, platform, {
+          includePrefix: true,
+          includeSuffix: true,
+          aspectRatio: aspect_ratio,
+        });
+        platformInfo = `Platform: ${platform} (${guidelines.mood})`;
+        debug(`[generate_image] Enhanced prompt for ${platform}: ${enhancedPrompt.substring(0, 150)}...`);
+      } else {
+        // Add aspect ratio prefix if not already present
+        const arPrefix = getAspectRatioPrefix(aspect_ratio);
+        if (!rawPrompt.toLowerCase().includes('aspect ratio') && !rawPrompt.toLowerCase().includes('format')) {
+          enhancedPrompt = `${arPrefix} ${rawPrompt}`;
+        }
+        // Add no-mockup instruction
+        enhancedPrompt = `${enhancedPrompt} NO text labels, NO mockup frames, NO canvas borders - just the direct social media post image.`;
+      }
+
+      // Step 4: Add text-specific instructions
+      enhancedPrompt = addTextInstructions(enhancedPrompt, textAnalysis);
+
       const model = getImageModel(modelId);
 
       if (!model) {
@@ -2615,12 +2785,20 @@ The generated image will be saved to the session's images folder and can be disp
         };
       }
 
-      debug(`[generate_image] Generating with ${model.id} (${model.provider}): ${prompt.substring(0, 100)}...`);
+      debug(`[generate_image] Generating with ${model.id} (${model.provider}): ${enhancedPrompt.substring(0, 100)}...`);
 
       // Route to appropriate provider
       if (model.provider === 'fal') {
-        // Use fal.ai for this model
-        const result = await generateWithFal(prompt, model, aspect_ratio, filename, sessionId, workspaceRootPath);
+        // Use fal.ai for this model (with optional style reference)
+        const result = await generateWithFal(
+          enhancedPrompt,
+          model,
+          aspect_ratio,
+          filename,
+          sessionId,
+          workspaceRootPath,
+          style_reference_image
+        );
 
         if (!result.success) {
           return {
@@ -2632,24 +2810,55 @@ The generated image will be saved to the session's images folder and can be disp
           };
         }
 
+        // Build response with text analysis info
+        const response: Record<string, unknown> = {
+          success: true,
+          imagePath: result.imagePath,
+          filename: result.filename,
+          aspectRatio: aspect_ratio,
+          prompt: enhancedPrompt.substring(0, 200) + (enhancedPrompt.length > 200 ? '...' : ''),
+          displayMarkdown: `![Generated Image](${result.imagePath})`,
+          cost: {
+            estimated: result.cost,
+            currency: 'USD',
+            model: model.id,
+            modelName: model.name,
+            provider: 'fal.ai',
+          },
+          textAnalysis: {
+            density: textAnalysis.density,
+            wordCount: textAnalysis.wordCount,
+            recommendedModel: textAnalysis.recommendedModel,
+          },
+        };
+
+        // Add style reference info if used
+        if (result.usedStyleReference) {
+          response.styleReference = {
+            used: true,
+            sourceImage: style_reference_image,
+          };
+        }
+
+        // Add platform info if provided
+        if (platformInfo) {
+          response.platform = platformInfo;
+        }
+
+        // Add warnings if any
+        if (warnings.length > 0) {
+          response.warnings = warnings;
+        }
+
+        // Add suggestion if model mismatch
+        if (modelCheck.suggestedModel) {
+          response.suggestedModel = modelCheck.suggestedModel;
+        }
+
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({
-              success: true,
-              imagePath: result.imagePath,
-              filename: result.filename,
-              aspectRatio: aspect_ratio,
-              prompt: prompt.substring(0, 200) + (prompt.length > 200 ? '...' : ''),
-              displayMarkdown: `![Generated Image](${result.imagePath})`,
-              cost: {
-                estimated: result.cost,
-                currency: 'USD',
-                model: model.id,
-                modelName: model.name,
-                provider: 'fal.ai',
-              },
-            }, null, 2),
+            text: JSON.stringify(response, null, 2),
           }],
         };
       } else {
@@ -2681,7 +2890,7 @@ The generated image will be saved to the session's images folder and can be disp
                   {
                     parts: [
                       {
-                        text: prompt,
+                        text: enhancedPrompt,
                       },
                     ],
                   },
@@ -2762,25 +2971,39 @@ The generated image will be saved to the session's images folder and can be disp
 
           debug(`[generate_image] Image saved to: ${imagePath}`);
 
+          // Build response with text analysis info
+          const geminiResponse: Record<string, unknown> = {
+            success: true,
+            imagePath,
+            filename: imageFilename,
+            aspectRatio: aspect_ratio,
+            prompt: enhancedPrompt.substring(0, 200) + (enhancedPrompt.length > 200 ? '...' : ''),
+            displayMarkdown: `![Generated Image](${imagePath})`,
+            cost: {
+              estimated: model.cost,
+              currency: 'USD',
+              model: model.id,
+              modelName: model.name,
+              provider: 'Google Direct',
+              note: 'Cost varies by resolution: ~$0.13 (1K/2K) or ~$0.24 (4K)',
+            },
+            textAnalysis: {
+              density: textAnalysis.density,
+              wordCount: textAnalysis.wordCount,
+              recommendedModel: textAnalysis.recommendedModel,
+              note: 'Gemini selected - excellent choice for text rendering',
+            },
+          };
+
+          // Add platform info if provided
+          if (platformInfo) {
+            geminiResponse.platform = platformInfo;
+          }
+
           return {
             content: [{
               type: 'text' as const,
-              text: JSON.stringify({
-                success: true,
-                imagePath,
-                filename: imageFilename,
-                aspectRatio: aspect_ratio,
-                prompt: prompt.substring(0, 200) + (prompt.length > 200 ? '...' : ''),
-                displayMarkdown: `![Generated Image](${imagePath})`,
-                cost: {
-                  estimated: model.cost,
-                  currency: 'USD',
-                  model: model.id,
-                  modelName: model.name,
-                  provider: 'Google Direct',
-                  note: 'Cost varies by resolution: ~$0.13 (1K/2K) or ~$0.24 (4K)',
-                },
-              }, null, 2),
+              text: JSON.stringify(geminiResponse, null, 2),
             }],
           };
         } catch (error) {
@@ -2794,6 +3017,428 @@ The generated image will be saved to the session's images folder and can be disp
             isError: true,
           };
         }
+      }
+    }
+  );
+}
+
+/**
+ * Create a session-scoped remix_image tool.
+ * Transforms an existing image based on a prompt while maintaining visual similarity.
+ */
+export function createRemixImageTool(sessionId: string, workspaceRootPath: string) {
+  const modelsWithRemix = getModelsWithRemix();
+  const modelIds = modelsWithRemix.map(m => m.id);
+
+  return tool(
+    'remix_image',
+    `Transform an existing image based on a prompt. This keeps the overall composition but applies changes.
+
+**Use this when the user wants to:**
+- "Make changes to this image"
+- "Transform this into..."
+- "Keep this but make it more..."
+- "Same composition, different style"
+
+**Models that support remix:**
+${modelsWithRemix.map(m => `- ${m.name}${m.referenceCapabilities?.supportsStrength ? ' (supports strength control)' : ''}`).join('\n')}
+
+**Strength parameter:**
+- 0.1-0.3: Subtle changes, very close to original
+- 0.4-0.6: Moderate transformation
+- 0.7-0.9: Significant changes, may deviate from original
+- Default: 0.8
+
+**IMPORTANT:** This creates a NEW image inspired by the source. It cannot perfectly preserve every detail.
+For precise edits, recommend Canva instead.`,
+    {
+      source_image: z.string().describe('Path to the image to transform (must be in session images folder or absolute path)'),
+      prompt: z.string().describe('Description of how to transform the image'),
+      model: z.enum(modelIds as [string, ...string[]])
+        .optional()
+        .describe('Model to use. Default: ideogram-v3-balanced'),
+      strength: z.number()
+        .min(0.1)
+        .max(1.0)
+        .optional()
+        .describe('How much to transform (0.1=subtle, 1.0=major changes). Default: 0.8'),
+      aspect_ratio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4'])
+        .optional()
+        .describe('Output aspect ratio. Default: matches source image if possible'),
+      filename: z.string()
+        .optional()
+        .describe('Optional filename for the output'),
+    },
+    async (args) => {
+      const {
+        source_image,
+        prompt,
+        model: modelId = 'ideogram-v3-balanced',
+        strength = 0.8,
+        aspect_ratio = '1:1',
+        filename
+      } = args;
+
+      const model = getImageModel(modelId);
+      if (!model) {
+        return {
+          content: [{ type: 'text' as const, text: `Unknown model: ${modelId}` }],
+          isError: true,
+        };
+      }
+
+      if (!model.referenceCapabilities?.remix) {
+        return {
+          content: [{ type: 'text' as const, text: `Model ${model.name} does not support remix. Use one of: ${modelIds.join(', ')}` }],
+          isError: true,
+        };
+      }
+
+      const remixEndpoint = model.referenceCapabilities.remixEndpoint;
+      if (!remixEndpoint) {
+        return {
+          content: [{ type: 'text' as const, text: `Model ${model.name} does not have a remix endpoint configured.` }],
+          isError: true,
+        };
+      }
+
+      // Get API key
+      const manager = getCredentialManager();
+      const apiKey = await manager.getFalApiKey();
+      if (!apiKey) {
+        return {
+          content: [{ type: 'text' as const, text: 'fal.ai API key not configured. Add it in Settings > App > Integrations.' }],
+          isError: true,
+        };
+      }
+
+      // Convert source image to data URI
+      let sourceDataUri: string;
+      try {
+        sourceDataUri = await fileToDataUri(source_image);
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `Failed to read source image: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+          isError: true,
+        };
+      }
+
+      debug(`[remix_image] Remixing with ${model.id}, strength=${strength}: ${prompt.substring(0, 100)}...`);
+
+      // Build request body for remix
+      const requestBody: Record<string, unknown> = {
+        prompt,
+        image_url: sourceDataUri,
+        num_images: 1,
+      };
+
+      // Add strength if supported
+      if (model.referenceCapabilities.supportsStrength) {
+        requestBody.strength = strength;
+      }
+
+      // Add aspect ratio / image size
+      if (remixEndpoint.includes('ideogram')) {
+        requestBody.image_size = mapAspectRatioToIdeogram(aspect_ratio);
+        requestBody.rendering_speed = model.falParams?.rendering_speed || 'BALANCED';
+      } else {
+        requestBody.aspect_ratio = aspect_ratio;
+      }
+
+      try {
+        const response = await fetch(`https://fal.run/${remixEndpoint}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Key ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          return {
+            content: [{ type: 'text' as const, text: `Remix failed: ${errorText}` }],
+            isError: true,
+          };
+        }
+
+        const data = await response.json() as { images?: Array<{ url: string; content_type?: string }> };
+        const firstImage = data.images?.[0];
+
+        if (!firstImage?.url) {
+          return {
+            content: [{ type: 'text' as const, text: 'No image was generated.' }],
+            isError: true,
+          };
+        }
+
+        // Download and save the image
+        const imageResponse = await fetch(firstImage.url);
+        if (!imageResponse.ok) {
+          return {
+            content: [{ type: 'text' as const, text: `Failed to download generated image: ${imageResponse.status}` }],
+            isError: true,
+          };
+        }
+
+        const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+        const contentType = firstImage.content_type || imageResponse.headers.get('content-type') || 'image/png';
+        const extension = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        let baseFilename = filename || `remix-${timestamp}`;
+        baseFilename = baseFilename.replace(/\.(png|jpg|jpeg|webp|gif)$/i, '');
+        const imageFilename = `${baseFilename}.${extension}`;
+
+        const sessionPath = getSessionPath(workspaceRootPath, sessionId);
+        const imagesDir = join(sessionPath, 'images');
+        mkdirSync(imagesDir, { recursive: true });
+
+        const imagePath = join(imagesDir, imageFilename);
+        writeFileSync(imagePath, imageBuffer);
+
+        debug(`[remix_image] Image saved to: ${imagePath}`);
+
+        const result = {
+          success: true,
+          imagePath,
+          filename: imageFilename,
+          displayMarkdown: `![Remixed Image](${imagePath})`,
+          sourceImage: source_image,
+          strength,
+          cost: {
+            estimated: model.cost,
+            currency: 'USD',
+            model: model.id,
+            modelName: model.name,
+          },
+          note: 'This is a NEW image inspired by the source. For precise edits, use Canva.',
+        };
+
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        debug(`[remix_image] Error: ${message}`);
+        return {
+          content: [{ type: 'text' as const, text: `Remix failed: ${message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+}
+
+/**
+ * Create a session-scoped edit_image tool.
+ * Edit specific regions of an image using inpainting with a mask.
+ */
+export function createEditImageTool(sessionId: string, workspaceRootPath: string) {
+  const modelsWithEdit = getModelsWithEdit();
+  const modelIds = modelsWithEdit.map(m => m.id);
+
+  return tool(
+    'edit_image',
+    `Edit specific regions of an image using inpainting. This allows precise modifications to parts of an image.
+
+**Use this when the user wants to:**
+- "Change the text on this image"
+- "Replace the background"
+- "Remove this element"
+- "Change just this part"
+
+**Models that support editing:**
+${modelsWithEdit.map(m => `- ${m.name}`).join('\n')}
+
+**Mask requirement:**
+You need a mask image that indicates which regions to edit:
+- WHITE areas (255) = regions to EDIT/REPLACE
+- BLACK areas (0) = regions to KEEP unchanged
+
+**If no mask is provided:** The entire image will be reimagined based on the prompt.
+
+**IMPORTANT:** For best results, the mask should be the same dimensions as the source image.`,
+    {
+      source_image: z.string().describe('Path to the image to edit'),
+      edit_prompt: z.string().describe('Description of what to put in the masked/edited region'),
+      mask_image: z.string()
+        .optional()
+        .describe('Path to mask image (white=edit, black=keep). If not provided, will edit the entire image.'),
+      model: z.enum(modelIds as [string, ...string[]])
+        .optional()
+        .describe('Model to use. Default: ideogram-v3-balanced'),
+      filename: z.string()
+        .optional()
+        .describe('Optional filename for the output'),
+    },
+    async (args) => {
+      const {
+        source_image,
+        edit_prompt,
+        mask_image,
+        model: modelId = 'ideogram-v3-balanced',
+        filename
+      } = args;
+
+      const model = getImageModel(modelId);
+      if (!model) {
+        return {
+          content: [{ type: 'text' as const, text: `Unknown model: ${modelId}` }],
+          isError: true,
+        };
+      }
+
+      if (!model.referenceCapabilities?.edit) {
+        return {
+          content: [{ type: 'text' as const, text: `Model ${model.name} does not support editing. Use one of: ${modelIds.join(', ')}` }],
+          isError: true,
+        };
+      }
+
+      const editEndpoint = model.referenceCapabilities.editEndpoint;
+      if (!editEndpoint) {
+        return {
+          content: [{ type: 'text' as const, text: `Model ${model.name} does not have an edit endpoint configured.` }],
+          isError: true,
+        };
+      }
+
+      // Get API key
+      const manager = getCredentialManager();
+      const apiKey = await manager.getFalApiKey();
+      if (!apiKey) {
+        return {
+          content: [{ type: 'text' as const, text: 'fal.ai API key not configured. Add it in Settings > App > Integrations.' }],
+          isError: true,
+        };
+      }
+
+      // Convert source image to data URI
+      let sourceDataUri: string;
+      try {
+        sourceDataUri = await fileToDataUri(source_image);
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `Failed to read source image: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+          isError: true,
+        };
+      }
+
+      // Convert mask image if provided
+      let maskDataUri: string | undefined;
+      if (mask_image) {
+        try {
+          maskDataUri = await fileToDataUri(mask_image);
+        } catch (error) {
+          return {
+            content: [{ type: 'text' as const, text: `Failed to read mask image: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+            isError: true,
+          };
+        }
+      }
+
+      debug(`[edit_image] Editing with ${model.id}: ${edit_prompt.substring(0, 100)}...`);
+
+      // Build request body for edit/inpaint
+      const requestBody: Record<string, unknown> = {
+        prompt: edit_prompt,
+        image_url: sourceDataUri,
+        num_images: 1,
+      };
+
+      // Add mask if provided
+      if (maskDataUri) {
+        requestBody.mask_url = maskDataUri;
+      }
+
+      // Add model-specific params
+      if (editEndpoint.includes('ideogram')) {
+        requestBody.rendering_speed = model.falParams?.rendering_speed || 'BALANCED';
+        requestBody.expand_prompt = false;
+      }
+
+      try {
+        const response = await fetch(`https://fal.run/${editEndpoint}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Key ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          return {
+            content: [{ type: 'text' as const, text: `Edit failed: ${errorText}` }],
+            isError: true,
+          };
+        }
+
+        const data = await response.json() as { images?: Array<{ url: string; content_type?: string }> };
+        const firstImage = data.images?.[0];
+
+        if (!firstImage?.url) {
+          return {
+            content: [{ type: 'text' as const, text: 'No image was generated.' }],
+            isError: true,
+          };
+        }
+
+        // Download and save the image
+        const imageResponse = await fetch(firstImage.url);
+        if (!imageResponse.ok) {
+          return {
+            content: [{ type: 'text' as const, text: `Failed to download generated image: ${imageResponse.status}` }],
+            isError: true,
+          };
+        }
+
+        const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+        const contentType = firstImage.content_type || imageResponse.headers.get('content-type') || 'image/png';
+        const extension = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        let baseFilename = filename || `edited-${timestamp}`;
+        baseFilename = baseFilename.replace(/\.(png|jpg|jpeg|webp|gif)$/i, '');
+        const imageFilename = `${baseFilename}.${extension}`;
+
+        const sessionPath = getSessionPath(workspaceRootPath, sessionId);
+        const imagesDir = join(sessionPath, 'images');
+        mkdirSync(imagesDir, { recursive: true });
+
+        const imagePath = join(imagesDir, imageFilename);
+        writeFileSync(imagePath, imageBuffer);
+
+        debug(`[edit_image] Image saved to: ${imagePath}`);
+
+        const result = {
+          success: true,
+          imagePath,
+          filename: imageFilename,
+          displayMarkdown: `![Edited Image](${imagePath})`,
+          sourceImage: source_image,
+          maskUsed: !!mask_image,
+          cost: {
+            estimated: model.cost,
+            currency: 'USD',
+            model: model.id,
+            modelName: model.name,
+          },
+        };
+
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        debug(`[edit_image] Error: ${message}`);
+        return {
+          content: [{ type: 'text' as const, text: `Edit failed: ${message}` }],
+          isError: true,
+        };
       }
     }
   );
@@ -2841,7 +3486,9 @@ export function getSessionScopedTools(sessionId: string, workspaceRootPath: stri
         createMicrosoftOAuthTriggerTool(sessionId, workspaceRootPath),
         createCredentialPromptTool(sessionId, workspaceRootPath),
         // Image generation tools (saves to session folder)
-        createUnifiedImageTool(sessionId, workspaceRootPath),  // New unified tool with model selection
+        createUnifiedImageTool(sessionId, workspaceRootPath),  // New unified tool with model selection + style reference
+        createRemixImageTool(sessionId, workspaceRootPath),    // Transform existing images
+        createEditImageTool(sessionId, workspaceRootPath),     // Edit/inpaint specific regions
         createGeminiImageTool(sessionId, workspaceRootPath),   // Legacy tool for backwards compatibility
         // Open images folder tool
         createOpenImagesFolderTool(sessionId, workspaceRootPath),

@@ -48,7 +48,9 @@
     "./version": "./src/version/index.ts",
     "./branding": "./src/branding.ts",
     "./network-interceptor": "./src/network-interceptor.ts",
-    "./search": "./src/search/index.ts"
+    "./search": "./src/search/index.ts",
+    "./schedules": "./src/schedules/index.ts",
+    "./schedules/browser": "./src/schedules/browser.ts"
   },
   "dependencies": {
     "@craft-agent/core": "workspace:*",

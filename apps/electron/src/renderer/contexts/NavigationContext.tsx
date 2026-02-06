@@ -57,11 +57,13 @@ import {
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
+  isSchedulesNavigation,
   DEFAULT_NAVIGATION_STATE,
 } from '../../shared/types'
 import { sessionMetaMapAtom, updateSessionMetaAtom, type SessionMeta } from '@/atoms/sessions'
 import { sourcesAtom } from '@/atoms/sources'
 import { skillsAtom } from '@/atoms/skills'
+import { schedulesAtom } from '@/atoms/schedules'
 
 // Re-export routes for convenience
 export { routes }
@@ -69,7 +71,7 @@ export type { Route }
 
 // Re-export navigation state types for consumers
 export type { NavigationState, ChatFilter }
-export { isChatsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation }
+export { isChatsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation, isSchedulesNavigation }
 
 interface NavigationContextValue {
   /** Navigate to a route */
@@ -130,6 +132,9 @@ export function NavigationProvider({
 
   // Read skills from atom (populated by AppShell)
   const skills = useAtomValue(skillsAtom)
+
+  // Read schedules from atom (populated by AppShell)
+  const schedules = useAtomValue(schedulesAtom)
 
   // UNIFIED NAVIGATION STATE - single source of truth for all 3 panels
   const [navigationState, setNavigationState] = useState<NavigationState>(DEFAULT_NAVIGATION_STATE)
@@ -208,6 +213,14 @@ export function NavigationProvider({
       return skills[0]?.slug ?? null
     },
     [skills]
+  )
+
+  // Helper: Get first schedule ID
+  const getFirstScheduleId = useCallback(
+    (): string | null => {
+      return schedules[0]?.id ?? null
+    },
+    [schedules]
   )
 
   // Handle action navigation (side effects that don't change navigation state)
@@ -393,11 +406,23 @@ export function NavigationProvider({
           }
           break
 
+        case 'new-schedule':
+          // Navigate to schedules view and dispatch event to open creator
+          setNavigationState({
+            navigator: 'schedules',
+            details: null,
+          })
+          // Dispatch event for AppShell to open the schedule creator dialog
+          window.dispatchEvent(new CustomEvent('craft:open-schedule-creator', {
+            detail: { skill: parsed.params.skill, name: parsed.params.name },
+          }))
+          break
+
         default:
           console.warn('[Navigation] Unknown action:', parsed.name)
       }
     },
-    [workspaceId, workspaceRootPath, onCreateSession, onInputChange, setSession]
+    [workspaceId, workspaceRootPath, onCreateSession, onInputChange, setSession, setNavigationState]
   )
 
 
@@ -463,6 +488,22 @@ export function NavigationProvider({
         }
       }
 
+      // For schedules: auto-select first schedule if no details provided
+      if (isSchedulesNavigation(newState) && !newState.details) {
+        const firstScheduleId = getFirstScheduleId()
+        if (firstScheduleId) {
+          const stateWithSelection: NavigationState = {
+            ...newState,
+            details: { type: 'schedule', scheduleId: firstScheduleId },
+          }
+          setNavigationState(stateWithSelection)
+          return stateWithSelection
+        } else {
+          setNavigationState(newState)
+          return newState
+        }
+      }
+
       // For chats with explicit session: update session selection
       if (isChatsNavigation(newState) && newState.details) {
         setSession({ selected: newState.details.sessionId })
@@ -472,7 +513,7 @@ export function NavigationProvider({
       setNavigationState(newState)
       return newState
     },
-    [getFirstSessionId, getFirstSourceSlug, getFirstSkillSlug, setSession]
+    [getFirstSessionId, getFirstSourceSlug, getFirstSkillSlug, getFirstScheduleId, setSession]
   )
 
   // Main navigate function - unified approach using NavigationState
@@ -581,8 +622,16 @@ export function NavigationProvider({
       return true
     }
 
+    if (isSchedulesNavigation(navState) && navState.details) {
+      if (navState.details.type === 'schedule') {
+        const { scheduleId } = navState.details
+        return schedules.some(s => s.id === scheduleId)
+      }
+      return true
+    }
+
     return true // Routes without details are always valid
-  }, [sessionMetaMap, sources, skills])
+  }, [sessionMetaMap, sources, skills, schedules])
 
   // Go back in history (using our custom stack)
   // When encountering invalid entries (deleted sessions/sources), remove them from the stack

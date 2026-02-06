@@ -23,20 +23,25 @@ import {
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
+  isSchedulesNavigation,
 } from '@/contexts/NavigationContext'
 import { AppSettingsPage, AppearanceSettingsPage, InputSettingsPage, WorkspaceSettingsPage, PermissionsSettingsPage, LabelsSettingsPage, PreferencesPage, ShortcutsPage, SourceInfoPage, ChatPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
+import ScheduleInfoPage from '@/pages/ScheduleInfoPage'
 
 export interface MainContentPanelProps {
   /** Whether the app is in focused mode (single chat, no sidebar) */
   isFocusedMode?: boolean
   /** Optional className for the container */
   className?: string
+  /** Callback to edit a schedule */
+  onEditSchedule?: (schedule: import('@craft-agent/shared/schedules/browser').ScheduleConfig) => void
 }
 
 export function MainContentPanel({
   isFocusedMode = false,
   className,
+  onEditSchedule,
 }: MainContentPanelProps) {
   const navState = useNavigationState()
   const { activeWorkspaceId } = useAppShellContext()
@@ -142,6 +147,29 @@ export function MainContentPanel({
       <Panel variant="grow" className={className}>
         <div className="flex items-center justify-center h-full text-muted-foreground">
           <p className="text-sm">No skills configured</p>
+        </div>
+      </Panel>
+    )
+  }
+
+  // Schedules navigator - show schedule info or empty state
+  if (isSchedulesNavigation(navState)) {
+    if (navState.details?.type === 'schedule') {
+      return wrapWithStoplight(
+        <Panel variant="grow" className={className}>
+          <ScheduleInfoPage
+            scheduleId={navState.details.scheduleId}
+            workspaceId={activeWorkspaceId || ''}
+            onEditSchedule={onEditSchedule}
+          />
+        </Panel>
+      )
+    }
+    // No schedule selected - empty state
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <div className="flex items-center justify-center h-full text-muted-foreground">
+          <p className="text-sm">No schedules configured</p>
         </div>
       </Panel>
     )

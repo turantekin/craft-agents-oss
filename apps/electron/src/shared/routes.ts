@@ -83,6 +83,10 @@ export const routes = {
     /** Copy text to clipboard */
     copyToClipboard: (text: string) =>
       `action/copy?text=${encodeURIComponent(text)}` as const,
+
+    /** Open schedule creator, optionally pre-filled with skill and name */
+    newSchedule: (params?: { skill?: string; name?: string }) =>
+      `action/new-schedule${toQueryString(params)}` as const,
   },
 
   // ============================================
@@ -148,6 +152,12 @@ export const routes = {
     skills: (skillSlug?: string) => {
       if (!skillSlug) return 'skills' as const
       return `skills/skill/${skillSlug}` as const
+    },
+
+    /** Schedules view (schedules navigator) */
+    schedules: (scheduleId?: string) => {
+      if (!scheduleId) return 'schedules' as const
+      return `schedules/schedule/${scheduleId}` as const
     },
 
     /** Settings view (settings navigator) */

@@ -24,6 +24,7 @@ import {
   FolderOpen,
   HelpCircle,
   ExternalLink,
+  CalendarClock,
 } from "lucide-react"
 import { PanelRightRounded } from "../icons/PanelRightRounded"
 import { PanelLeftRounded } from "../icons/PanelLeftRounded"
@@ -79,9 +80,11 @@ import { useFocusContext } from "@/context/FocusContext"
 import { getSessionTitle } from "@/utils/session"
 import { useSetAtom } from "jotai"
 import type { Session, Workspace, FileAttachment, PermissionRequest, LoadedSource, LoadedSkill, PermissionMode, SourceFilter } from "../../../shared/types"
+import type { ScheduleConfig } from "@craft-agent/shared/schedules/browser"
 import { sessionMetaMapAtom, type SessionMeta } from "@/atoms/sessions"
 import { sourcesAtom } from "@/atoms/sources"
 import { skillsAtom, skillPreferencesAtom } from "@/atoms/skills"
+import { schedulesAtom } from "@/atoms/schedules"
 import { type TodoStateId, type TodoState, statusConfigsToTodoStates } from "@/config/todo-states"
 import { useStatuses } from "@/hooks/useStatuses"
 import { useLabels } from "@/hooks/useLabels"
@@ -101,12 +104,15 @@ import {
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
+  isSchedulesNavigation,
   type NavigationState,
   type ChatFilter,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
 import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
+import { SchedulesListPanel } from "./SchedulesListPanel"
+import { ScheduleCreator } from "@/components/schedules"
 import { PanelHeader } from "./PanelHeader"
 import { EditPopover, getEditConfig, type EditContextKey } from "@/components/ui/EditPopover"
 import { getDocUrl } from "@craft-agent/shared/docs/doc-links"
@@ -801,6 +807,62 @@ function AppShellContent({
     return cleanup
   }, [])
 
+  // Schedules state (workspace-scoped)
+  const [schedules, setSchedules] = React.useState<ScheduleConfig[]>([])
+  const existingScheduleGroups = React.useMemo(
+    () => [...new Set(schedules.map(s => s.group).filter((g): g is string => !!g))].sort(),
+    [schedules]
+  )
+  // Sync schedules to atom for NavigationContext auto-selection
+  const setSchedulesAtom = useSetAtom(schedulesAtom)
+  React.useEffect(() => {
+    setSchedulesAtom(schedules)
+  }, [schedules, setSchedulesAtom])
+
+  // Load schedules from backend on mount
+  React.useEffect(() => {
+    if (!activeWorkspaceId) return
+    window.electronAPI.listSchedules(activeWorkspaceId).then((loaded) => {
+      setSchedules(loaded || [])
+    }).catch(err => {
+      console.error('[Chat] Failed to load schedules:', err)
+    })
+  }, [activeWorkspaceId])
+
+  // Subscribe to live schedule updates (when schedules are added/modified/deleted)
+  React.useEffect(() => {
+    if (!activeWorkspaceId) return
+    const cleanup = window.electronAPI.onSchedulesChanged?.((changedWorkspaceId) => {
+      // Only reload if the change is for the active workspace
+      if (changedWorkspaceId === activeWorkspaceId) {
+        window.electronAPI.listSchedules(activeWorkspaceId).then((loaded) => {
+          setSchedules(loaded || [])
+        }).catch(err => {
+          console.error('[Chat] Failed to reload schedules:', err)
+        })
+      }
+    })
+    return cleanup
+  }, [activeWorkspaceId])
+
+  // Subscribe to schedule execution events for toast notifications
+  React.useEffect(() => {
+    const cleanup = window.electronAPI.onScheduleExecuted?.((data) => {
+      const scheduleName = schedules.find(s => s.id === data.scheduleId)?.name || 'Schedule'
+      if (data.success) {
+        toast.success(`${scheduleName} completed`, {
+          action: data.sessionId ? {
+            label: 'View Session',
+            onClick: () => navigate(routes.view.allChats(data.sessionId)),
+          } : undefined,
+        })
+      } else {
+        toast.error(`${scheduleName} failed`)
+      }
+    })
+    return cleanup
+  }, [schedules])
+
   // Handle session source selection changes
   const handleSessionSourcesChange = React.useCallback(async (sessionId: string, sourceSlugs: string[]) => {
     try {
@@ -1447,6 +1509,11 @@ function AppShellContent({
     navigate(routes.view.skills())
   }, [])
 
+  // Handler for schedules view
+  const handleSchedulesClick = useCallback(() => {
+    navigate(routes.view.schedules())
+  }, [])
+
   // Handler for settings view
   const handleSettingsClick = useCallback((subpage: SettingsSubpage = 'app') => {
     navigate(routes.view.settings(subpage))
@@ -1608,6 +1675,99 @@ function AppShellContent({
     }
   }, [activeWorkspace])
 
+  // Handle selecting a schedule from the list
+  const handleScheduleSelect = useCallback((schedule: ScheduleConfig) => {
+    if (!activeWorkspaceId) return
+    navigate(routes.view.schedules(schedule.id))
+  }, [activeWorkspaceId])
+
+  // Pause Schedule
+  const handlePauseSchedule = useCallback(async (scheduleId: string) => {
+    if (!activeWorkspace) return
+    try {
+      await window.electronAPI.pauseSchedule?.(activeWorkspace.id, scheduleId)
+      toast.success('Schedule paused')
+    } catch (error) {
+      console.error('[Chat] Failed to pause schedule:', error)
+      toast.error('Failed to pause schedule')
+    }
+  }, [activeWorkspace])
+
+  // Resume Schedule
+  const handleResumeSchedule = useCallback(async (scheduleId: string) => {
+    if (!activeWorkspace) return
+    try {
+      await window.electronAPI.resumeSchedule?.(activeWorkspace.id, scheduleId)
+      toast.success('Schedule resumed')
+    } catch (error) {
+      console.error('[Chat] Failed to resume schedule:', error)
+      toast.error('Failed to resume schedule')
+    }
+  }, [activeWorkspace])
+
+  // Run Schedule Now
+  const handleRunScheduleNow = useCallback(async (scheduleId: string) => {
+    if (!activeWorkspace) return
+    try {
+      await window.electronAPI.runScheduleNow?.(activeWorkspace.id, scheduleId)
+      toast.success('Schedule running')
+    } catch (error) {
+      console.error('[Chat] Failed to run schedule:', error)
+      toast.error('Failed to run schedule')
+    }
+  }, [activeWorkspace])
+
+  // Delete Schedule
+  const handleDeleteSchedule = useCallback(async (scheduleId: string) => {
+    if (!activeWorkspace) return
+    try {
+      await window.electronAPI.deleteSchedule?.(activeWorkspace.id, scheduleId)
+      toast.success('Deleted schedule')
+    } catch (error) {
+      console.error('[Chat] Failed to delete schedule:', error)
+      toast.error('Failed to delete schedule')
+    }
+  }, [activeWorkspace])
+
+  // Create/Edit Schedule dialog state
+  const [isCreateScheduleOpen, setIsCreateScheduleOpen] = React.useState(false)
+  const [editingSchedule, setEditingSchedule] = React.useState<import('@craft-agent/shared/schedules/browser').ScheduleConfig | null>(null)
+  const [scheduleInitialValues, setScheduleInitialValues] = React.useState<{ skill?: string; name?: string } | undefined>(undefined)
+  const openCreateSchedule = useCallback(() => {
+    setEditingSchedule(null)
+    setScheduleInitialValues(undefined)
+    setIsCreateScheduleOpen(true)
+  }, [])
+  const handleEditSchedule = useCallback((scheduleOrId: string | import('@craft-agent/shared/schedules/browser').ScheduleConfig) => {
+    const schedule = typeof scheduleOrId === 'string'
+      ? schedules.find(s => s.id === scheduleOrId) ?? null
+      : scheduleOrId
+    if (schedule) {
+      setEditingSchedule(schedule)
+      setScheduleInitialValues(undefined)
+      setIsCreateScheduleOpen(true)
+    }
+  }, [schedules])
+  const handleScheduleDialogClose = useCallback((open: boolean) => {
+    setIsCreateScheduleOpen(open)
+    if (!open) {
+      setEditingSchedule(null)
+      setScheduleInitialValues(undefined)
+    }
+  }, [])
+
+  // Listen for deep link open-schedule-creator events
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { skill?: string; name?: string } | undefined
+      setEditingSchedule(null)
+      setScheduleInitialValues(detail || undefined)
+      setIsCreateScheduleOpen(true)
+    }
+    window.addEventListener('craft:open-schedule-creator', handler)
+    return () => window.removeEventListener('craft:open-schedule-creator', handler)
+  }, [])
+
   // Respond to menu bar "New Chat" trigger
   const menuTriggerRef = useRef(menuNewChatTrigger)
   useEffect(() => {
@@ -1648,13 +1808,14 @@ function AppShellContent({
     }
     flattenTree(labelTree)
 
-    // 3. Sources, Skills, Settings
+    // 3. Sources, Skills, Schedules, Settings
     result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
+    result.push({ id: 'nav:schedules', type: 'nav', action: handleSchedulesClick })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick('app') })
 
     return result
-  }, [handleAllChatsClick, handleFlaggedClick, handleTodoStateClick, effectiveTodoStates, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleSettingsClick])
+  }, [handleAllChatsClick, handleFlaggedClick, handleTodoStateClick, effectiveTodoStates, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleSchedulesClick, handleSettingsClick])
 
   // Toggle folder expanded state
   const handleToggleFolder = React.useCallback((path: string) => {
@@ -2088,6 +2249,14 @@ function AppShellContent({
                         type: 'skills',
                         onAddSkill: openAddSkill,
                       },
+                    },
+                    {
+                      id: "nav:schedules",
+                      title: "Schedules",
+                      label: String(schedules.length),
+                      icon: CalendarClock,
+                      variant: isSchedulesNavigation(navState) ? "default" : "ghost",
+                      onClick: handleSchedulesClick,
                     },
                     // --- Separator ---
                     { id: "separator:skills-settings", type: "separator" },
@@ -2770,6 +2939,14 @@ function AppShellContent({
                       {...getEditConfig('add-skill', activeWorkspace.rootPath)}
                     />
                   )}
+                  {/* New Schedule button (only for schedules mode) */}
+                  {isSchedulesNavigation(navState) && activeWorkspaceId && (
+                    <HeaderIconButton
+                      icon={<Plus className="h-4 w-4" />}
+                      tooltip="New Schedule"
+                      onClick={openCreateSchedule}
+                    />
+                  )}
                 </>
               }
             />
@@ -2795,6 +2972,21 @@ function AppShellContent({
                 onSkillClick={handleSkillSelect}
                 onDeleteSkill={handleDeleteSkill}
                 selectedSkillSlug={isSkillsNavigation(navState) && navState.details?.type === 'skill' ? navState.details.skillSlug : null}
+              />
+            )}
+            {isSchedulesNavigation(navState) && activeWorkspaceId && (
+              /* Schedules List */
+              <SchedulesListPanel
+                schedules={schedules}
+                workspaceId={activeWorkspaceId}
+                onScheduleClick={handleScheduleSelect}
+                onPauseSchedule={handlePauseSchedule}
+                onResumeSchedule={handleResumeSchedule}
+                onRunNow={handleRunScheduleNow}
+                onDeleteSchedule={handleDeleteSchedule}
+                onEditSchedule={handleEditSchedule}
+                onCreateSchedule={openCreateSchedule}
+                selectedScheduleId={isSchedulesNavigation(navState) && navState.details?.type === 'schedule' ? navState.details.scheduleId : null}
               />
             )}
             {isSettingsNavigation(navState) && (
@@ -2895,7 +3087,7 @@ function AppShellContent({
             "flex-1 overflow-hidden min-w-0 bg-foreground-2 shadow-middle",
             isFocusedMode ? "rounded-[14px]" : (isRightSidebarVisible ? "rounded-l-[10px] rounded-r-[10px]" : "rounded-l-[10px] rounded-r-[14px]")
           )}>
-            <MainContentPanel isFocusedMode={isFocusedMode} />
+            <MainContentPanel isFocusedMode={isFocusedMode} onEditSchedule={handleEditSchedule} />
           </div>
 
           {/* Right Sidebar - Inline Mode (≥ 920px) */}
@@ -3153,6 +3345,22 @@ function AppShellContent({
             })()}
           />
         </>
+      )}
+
+      {/* Schedule Creator Dialog */}
+      {activeWorkspaceId && (
+        <ScheduleCreator
+          workspaceId={activeWorkspaceId}
+          skills={skills}
+          open={isCreateScheduleOpen}
+          onOpenChange={handleScheduleDialogClose}
+          editSchedule={editingSchedule}
+          existingGroups={existingScheduleGroups}
+          initialValues={scheduleInitialValues}
+          onUpdated={(id) => {
+            // Schedule updated - list auto-refreshes via onSchedulesChanged
+          }}
+        />
       )}
 
       </TooltipProvider>

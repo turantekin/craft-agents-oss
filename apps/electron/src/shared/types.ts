@@ -395,6 +395,8 @@ export interface CreateSessionOptions {
   systemPromptPreset?: 'default' | 'mini' | string
   /** When true, session won't appear in session list (e.g., mini edit sessions) */
   hidden?: boolean
+  /** Source slugs to enable immediately after session creation (used by scheduler) */
+  enabledSourceSlugs?: string[]
 }
 
 // Events sent from main to renderer
@@ -551,6 +553,8 @@ export const IPC_CHANNELS = {
   READ_FILE_ATTACHMENT: 'file:readAttachment',
   STORE_ATTACHMENT: 'file:storeAttachment',
   GENERATE_THUMBNAIL: 'file:generateThumbnail',
+  SAVE_FILE_DIALOG: 'file:saveDialog',
+  UPLOAD_TO_GOOGLE_DRIVE: 'file:uploadGoogleDrive',
 
   // Filesystem search (for @ mention file selection)
   FS_SEARCH: 'fs:search',
@@ -782,6 +786,18 @@ export const IPC_CHANNELS = {
 
   // Voice input (Whisper transcription)
   VOICE_TRANSCRIBE: 'voice:transcribe',
+
+  // Schedule management (workspace-scoped)
+  SCHEDULES_LIST: 'schedules:list',
+  SCHEDULE_GET: 'schedule:get',
+  SCHEDULE_CREATE: 'schedule:create',
+  SCHEDULE_UPDATE: 'schedule:update',
+  SCHEDULE_DELETE: 'schedule:delete',
+  SCHEDULE_PAUSE: 'schedule:pause',
+  SCHEDULE_RESUME: 'schedule:resume',
+  SCHEDULE_RUN_NOW: 'schedule:runNow',
+  SCHEDULES_CHANGED: 'schedules:changed',  // Broadcast event
+  SCHEDULE_EXECUTED: 'schedule:executed',  // Broadcast event (schedule ran)
 } as const
 
 // Re-import types for ElectronAPI
@@ -845,6 +861,10 @@ export interface ElectronAPI {
   readFileAttachment(path: string): Promise<FileAttachment | null>
   storeAttachment(sessionId: string, attachment: FileAttachment): Promise<import('../../../../packages/core/src/types/index.ts').StoredAttachment>
   generateThumbnail(base64: string, mimeType: string): Promise<string | null>
+  /** Show native save dialog and copy a file to the chosen location */
+  saveFileDialog(sourcePath: string, defaultFileName?: string): Promise<{ success: boolean; savedPath?: string; error?: string }>
+  /** Upload a file to Google Drive via a connected source */
+  uploadToGoogleDrive(workspaceId: string, sourceSlug: string, filePath: string, fileName?: string): Promise<{ success: boolean; fileId?: string; url?: string; error?: string }>
 
   // Filesystem search (for @ mention file selection)
   searchFiles(basePath: string, query: string): Promise<FileSearchResult[]>
@@ -1090,6 +1110,20 @@ export interface ElectronAPI {
 
   // Voice transcription (OpenAI Whisper)
   voiceTranscribe(audioBase64: string, mimeType: string): Promise<{ success: boolean; text?: string; error?: string }>
+
+  // Schedules (workspace-scoped)
+  listSchedules(workspaceId: string): Promise<import('@craft-agent/shared/schedules').ScheduleConfig[]>
+  getSchedule(workspaceId: string, scheduleId: string): Promise<import('@craft-agent/shared/schedules').ScheduleConfig | null>
+  createSchedule(workspaceId: string, input: import('@craft-agent/shared/schedules').CreateScheduleInput): Promise<import('@craft-agent/shared/schedules').ScheduleConfig>
+  updateSchedule(workspaceId: string, scheduleId: string, updates: import('@craft-agent/shared/schedules').UpdateScheduleInput): Promise<import('@craft-agent/shared/schedules').ScheduleConfig | null>
+  deleteSchedule(workspaceId: string, scheduleId: string): Promise<boolean>
+  pauseSchedule(workspaceId: string, scheduleId: string): Promise<import('@craft-agent/shared/schedules').ScheduleConfig | null>
+  resumeSchedule(workspaceId: string, scheduleId: string): Promise<import('@craft-agent/shared/schedules').ScheduleConfig | null>
+  runScheduleNow(workspaceId: string, scheduleId: string): Promise<{ success: boolean; sessionId?: string; error?: string }>
+  // Schedule change listener (live updates when schedules config changes)
+  onSchedulesChanged(callback: (workspaceId: string) => void): () => void
+  // Schedule execution listener (notified when a schedule completes)
+  onScheduleExecuted(callback: (data: { workspaceId: string; scheduleId: string; sessionId: string; success: boolean }) => void): () => void
 }
 
 /**
@@ -1248,6 +1282,17 @@ export interface SkillsNavigationState {
 }
 
 /**
+ * Schedules navigation state - shows SchedulesListPanel in navigator
+ */
+export interface SchedulesNavigationState {
+  navigator: 'schedules'
+  /** Selected schedule details or null for empty state */
+  details: { type: 'schedule'; scheduleId: string } | null
+  /** Optional right sidebar panel state */
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state - single source of truth for all 3 panels
  *
  * From this state we can derive:
@@ -1260,6 +1305,7 @@ export type NavigationState =
   | SourcesNavigationState
   | SettingsNavigationState
   | SkillsNavigationState
+  | SchedulesNavigationState
 
 /**
  * Type guard to check if state is chats navigation
@@ -1290,6 +1336,13 @@ export const isSkillsNavigation = (
 ): state is SkillsNavigationState => state.navigator === 'skills'
 
 /**
+ * Type guard to check if state is schedules navigation
+ */
+export const isSchedulesNavigation = (
+  state: NavigationState
+): state is SchedulesNavigationState => state.navigator === 'schedules'
+
+/**
  * Default navigation state - allChats with no selection
  */
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
@@ -1313,6 +1366,12 @@ export const getNavigationStateKey = (state: NavigationState): string => {
       return `skills/skill/${state.details.skillSlug}`
     }
     return 'skills'
+  }
+  if (state.navigator === 'schedules') {
+    if (state.details?.type === 'schedule') {
+      return `schedules/schedule/${state.details.scheduleId}`
+    }
+    return 'schedules'
   }
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
@@ -1353,6 +1412,16 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       return { navigator: 'skills', details: { type: 'skill', skillSlug } }
     }
     return { navigator: 'skills', details: null }
+  }
+
+  // Handle schedules
+  if (key === 'schedules') return { navigator: 'schedules', details: null }
+  if (key.startsWith('schedules/schedule/')) {
+    const scheduleId = key.slice(19)
+    if (scheduleId) {
+      return { navigator: 'schedules', details: { type: 'schedule', scheduleId } }
+    }
+    return { navigator: 'schedules', details: null }
   }
 
   // Handle settings

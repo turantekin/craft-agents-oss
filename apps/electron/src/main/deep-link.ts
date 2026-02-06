@@ -11,6 +11,7 @@
  *   craftagents://state/{stateId}[/chat/{sessionId}]     - Chat list (state filter)
  *   craftagents://sources[/source/{sourceSlug}]          - Sources list
  *   craftagents://settings[/{subpage}]                   - Settings (general, shortcuts, preferences)
+ *   craftagents://schedules[/schedule/{scheduleId}]      - Schedules list
  *
  * Action format:
  *   craftagents://action/{actionName}[/{id}][?params]
@@ -118,7 +119,7 @@ export function parseDeepLink(url: string): DeepLinkTarget | null {
 
     // Compound route prefixes
     const COMPOUND_ROUTE_PREFIXES = [
-      'allChats', 'flagged', 'state', 'sources', 'settings', 'skills'
+      'allChats', 'flagged', 'state', 'sources', 'settings', 'skills', 'schedules'
     ]
 
     // craftagents://allChats/..., craftagents://settings/..., etc. (compound routes)

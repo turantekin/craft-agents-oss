@@ -580,6 +580,19 @@ export class SessionManager {
         this.broadcastSkillsChanged(skills)
       },
 
+      // Schedules config changes
+      onScheduleConfigChange: async () => {
+        sessionLog.info(`Schedules config changed in ${workspaceId}`)
+        // Notify SchedulerService to reload schedules for this workspace
+        const { getSchedulerService } = await import('./index')
+        const schedulerService = getSchedulerService()
+        if (schedulerService) {
+          schedulerService.handleScheduleConfigChange(workspaceRootPath, workspaceId)
+        }
+        // Broadcast to UI so the schedules list updates
+        this.broadcastSchedulesChanged(workspaceId)
+      },
+
       // Session metadata changes (external edits to session.jsonl headers).
       // Detects label/flag/name/todoState changes made by other instances or scripts.
       // Compares with in-memory state and only emits events for actual differences.
@@ -689,6 +702,16 @@ export class SessionManager {
     if (!this.windowManager) return
     sessionLog.info('Broadcasting default permissions changed')
     this.windowManager.broadcastToAll(IPC_CHANNELS.DEFAULT_PERMISSIONS_CHANGED, null)
+  }
+
+  /**
+   * Broadcast schedules changed event to all windows
+   * Triggered when schedules/config.json changes
+   */
+  private broadcastSchedulesChanged(workspaceId: string): void {
+    if (!this.windowManager) return
+    sessionLog.info(`Broadcasting schedules changed for ${workspaceId}`)
+    this.windowManager.broadcastToAll(IPC_CHANNELS.SCHEDULES_CHANGED, workspaceId)
   }
 
   /**
@@ -1443,7 +1466,18 @@ export class SessionManager {
       hidden: options?.hidden,
     }
 
+    // If source slugs provided (e.g., from scheduler), store them on the managed session.
+    // The sendMessage() flow will pick these up and build MCP/API servers automatically.
+    if (options?.enabledSourceSlugs?.length) {
+      managed.enabledSourceSlugs = options.enabledSourceSlugs
+    }
+
     this.sessions.set(storedSession.id, managed)
+
+    // Persist source slugs if they were set
+    if (options?.enabledSourceSlugs?.length) {
+      this.persistSession(managed)
+    }
 
     return {
       id: storedSession.id,
