@@ -1,7 +1,24 @@
-import { existsSync, readFileSync, statSync, writeFileSync, unlinkSync, mkdtempSync } from 'fs';
+import { existsSync, readFileSync, statSync, writeFileSync, unlinkSync, mkdtempSync, renameSync } from 'fs';
 import { extname, basename, resolve, join, relative } from 'path';
 import { execSync } from 'child_process';
 import { tmpdir } from 'os';
+
+/**
+ * Atomically write a file by writing to a temp file then renaming.
+ * This prevents partial writes from corrupting the file on crash/interrupt.
+ * Uses write-to-temp-then-rename pattern which is atomic on POSIX systems.
+ */
+export function atomicWriteFileSync(filePath: string, data: string): void {
+  const tmpPath = filePath + '.tmp';
+  try {
+    writeFileSync(tmpPath, data);
+    renameSync(tmpPath, filePath);
+  } catch (error) {
+    // Clean up temp file if rename failed
+    try { unlinkSync(tmpPath); } catch {}
+    throw error;
+  }
+}
 
 export interface FileAttachment {
   type: 'image' | 'text' | 'pdf' | 'office' | 'unknown';
@@ -64,10 +81,17 @@ const MAX_IMAGE_DIMENSION = 8000; // 8000x8000 max pixels
 const OPTIMAL_IMAGE_EDGE = 1568; // Recommended max edge for quality/cost balance (~1.15MP)
 
 /**
+ * Typed error codes for image validation failures
+ */
+export type ImageValidationError = 'dimension_exceeded' | 'size_exceeded';
+
+/**
  * Result of validating an image for Claude API compatibility
  */
 export interface ImageValidationResult {
   valid: boolean;
+  /** Typed error code for programmatic handling */
+  errorCode?: ImageValidationError;
   /** Hard error - image cannot be sent */
   error?: string;
   /** Warning - image will work but may have issues */
@@ -96,6 +120,7 @@ export function validateImageForClaudeAPI(
     const sizeMB = (size / 1024 / 1024).toFixed(1);
     return {
       valid: false,
+      errorCode: 'size_exceeded',
       error: `Image too large (${sizeMB}MB). Claude API limit is 5MB. Please resize or compress the image.`,
     };
   }
@@ -106,6 +131,7 @@ export function validateImageForClaudeAPI(
     if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
       return {
         valid: false,
+        errorCode: 'dimension_exceeded',
         error: `Image dimensions too large (${width}×${height}). Maximum is ${MAX_IMAGE_DIMENSION}×${MAX_IMAGE_DIMENSION} pixels.`,
       };
     }
@@ -134,6 +160,10 @@ export const IMAGE_LIMITS = {
   MAX_SIZE: MAX_IMAGE_SIZE,
   MAX_DIMENSION: MAX_IMAGE_DIMENSION,
   OPTIMAL_EDGE: OPTIMAL_IMAGE_EDGE,
+  /** JPEG quality for photo-like images */
+  JPEG_QUALITY_HIGH: 90,
+  /** JPEG quality for fallback compression when size still exceeds limits */
+  JPEG_QUALITY_FALLBACK: 75,
 } as const;
 
 /**

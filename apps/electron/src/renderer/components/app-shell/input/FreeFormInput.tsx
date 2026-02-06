@@ -52,7 +52,7 @@ import {
 } from '@/components/ui/styled-dropdown'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { PATH_SEP, getPathBasename } from '@/lib/platform'
+import { isMac, PATH_SEP, getPathBasename } from '@/lib/platform'
 import { applySmartTypography } from '@/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
 import { MODELS, getModelShortName, getModelContextWindow, isClaudeModel } from '@config/models'
@@ -82,6 +82,9 @@ function formatTokenCount(tokens: number): string {
   return tokens.toString()
 }
 
+/** Platform-specific modifier key for keyboard shortcuts */
+const cmdKey = isMac ? '⌘' : 'Ctrl'
+
 /** Default rotating placeholders for onboarding/empty state */
 const DEFAULT_PLACEHOLDERS = [
   'What would you like to work on?',
@@ -89,6 +92,8 @@ const DEFAULT_PLACEHOLDERS = [
   'Type @ to mention files, folders, or skills',
   'Type # to apply labels to this conversation',
   'Press Shift + Return to add a new line',
+  `Press ${cmdKey} + B to toggle the sidebar`,
+  `Press ${cmdKey} + . for focus mode`,
 ]
 
 /** Fisher-Yates shuffle — returns a new array in random order */
@@ -248,6 +253,14 @@ export function FreeFormInput({
     if (!appShellCtx || !workspaceId) return null
     return appShellCtx.workspaces.find(w => w.id === workspaceId)?.rootPath ?? null
   }, [appShellCtx, workspaceId])
+
+  // Compute workspace slug from rootPath for SDK skill qualification
+  // SDK expects "workspaceSlug:skillSlug" format, NOT UUID
+  const workspaceSlug = React.useMemo(() => {
+    if (!workspaceRootPath) return workspaceId // Fallback to ID if no path
+    const pathParts = workspaceRootPath.split('/').filter(Boolean)
+    return pathParts[pathParts.length - 1] || workspaceId
+  }, [workspaceRootPath, workspaceId])
 
   // Shuffle placeholder order once per mount so each session feels fresh
   const shuffledPlaceholder = React.useMemo(
@@ -713,7 +726,8 @@ export function FreeFormInput({
     sources,
     basePath: workingDirectory,
     onSelect: handleMentionSelect,
-    workspaceId,
+    // Use workspace slug (not UUID) for SDK skill qualification
+    workspaceId: workspaceSlug,
   })
 
   // Inline label menu hook (for #labels)
@@ -1581,7 +1595,8 @@ export function FreeFormInput({
                 MODELS.map((model) => {
                   const isSelected = currentModel === model.id
                   const descriptions: Record<string, string> = {
-                    'claude-opus-4-5-20251101': 'Most capable for complex work',
+                    'claude-opus-4-6': 'Most capable for complex work',
+                    'claude-opus-4-5-20251101': 'Previous generation',
                     'claude-sonnet-4-5-20250929': 'Best for everyday tasks',
                     'claude-haiku-4-5-20251001': 'Fastest for quick answers',
                   }

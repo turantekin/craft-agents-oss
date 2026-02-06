@@ -87,6 +87,8 @@ import {
   type TextAnalysisResult,
   type Platform,
 } from './image-models.ts';
+import { createLLMTool } from './llm-tool.ts';
+import { isGoogleOAuthConfigured } from '../auth/google-oauth.ts';
 
 // ============================================================
 // Session-Scoped Tool Callbacks
@@ -95,7 +97,7 @@ import {
 /**
  * Credential input modes for different auth types
  */
-export type CredentialInputMode = 'bearer' | 'basic' | 'header' | 'query';
+export type CredentialInputMode = 'bearer' | 'basic' | 'header' | 'query' | 'multi-header';
 
 /**
  * Auth request types
@@ -131,8 +133,12 @@ export interface CredentialAuthRequest extends BaseAuthRequest {
   description?: string;
   hint?: string;
   headerName?: string;
+  /** Header names for multi-header auth (e.g., ["DD-API-KEY", "DD-APPLICATION-KEY"]) */
+  headerNames?: string[];
   /** Source URL/domain for password manager credential matching (1Password, etc.) */
   sourceUrl?: string;
+  /** For basic auth: whether password is required. Default true for backward compatibility. */
+  passwordRequired?: boolean;
 }
 
 /**
@@ -188,6 +194,52 @@ export interface AuthResult {
   // Additional info for successful auth
   email?: string;      // For Google/Microsoft OAuth
   workspace?: string;  // For Slack OAuth
+}
+
+// ============================================================
+// Helper Functions (exported for testing)
+// ============================================================
+
+/**
+ * Detect the effective credential input mode based on source config and requested mode.
+ *
+ * Auto-upgrades to 'multi-header' when source has headerNames array, regardless of
+ * what mode was explicitly requested. This ensures Datadog-like sources (with
+ * headerNames: ["DD-API-KEY", "DD-APPLICATION-KEY"]) always use multi-header UI.
+ *
+ * @param source - Source configuration (may be null if source not found)
+ * @param requestedMode - Mode explicitly requested in tool call
+ * @param requestedHeaderNames - Header names explicitly provided in tool call
+ * @returns Effective mode to use
+ */
+export function detectCredentialMode(
+  source: { api?: { headerNames?: string[] } } | null,
+  requestedMode: CredentialInputMode,
+  requestedHeaderNames?: string[]
+): CredentialInputMode {
+  // Use provided headerNames or fall back to source config
+  const effectiveHeaderNames = requestedHeaderNames || source?.api?.headerNames;
+
+  // If we have headerNames, always use multi-header mode
+  if (effectiveHeaderNames && effectiveHeaderNames.length > 0) {
+    return 'multi-header';
+  }
+
+  return requestedMode;
+}
+
+/**
+ * Get effective header names from request args or source config.
+ *
+ * @param source - Source configuration
+ * @param requestedHeaderNames - Header names explicitly provided in tool call
+ * @returns Array of header names or undefined
+ */
+export function getEffectiveHeaderNames(
+  source: { api?: { headerNames?: string[] } } | null,
+  requestedHeaderNames?: string[]
+): string[] | undefined {
+  return requestedHeaderNames || source?.api?.headerNames;
 }
 
 /**
@@ -1464,6 +1516,47 @@ After successful authentication, the tokens are stored and the source is marked 
           };
         }
 
+        // Check if Google OAuth credentials are configured (in source config or env vars)
+        const api = source.api;
+        if (!isGoogleOAuthConfigured(api?.googleOAuthClientId, api?.googleOAuthClientSecret)) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `Google OAuth credentials not configured for source '${args.sourceSlug}'.
+
+To authenticate with Google services, you need to provide your own OAuth credentials.
+
+**Option 1: Add credentials to source config**
+Edit the source's config.json and add:
+\`\`\`json
+{
+  "api": {
+    "googleOAuthClientId": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+    "googleOAuthClientSecret": "YOUR_CLIENT_SECRET"
+  }
+}
+\`\`\`
+
+**Option 2: Set environment variables**
+\`\`\`bash
+export GOOGLE_OAUTH_CLIENT_ID="YOUR_CLIENT_ID.apps.googleusercontent.com"
+export GOOGLE_OAUTH_CLIENT_SECRET="YOUR_CLIENT_SECRET"
+\`\`\`
+
+**How to get credentials:**
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a project (or select existing)
+3. Enable the required API (Gmail API, Calendar API, etc.)
+4. Go to "APIs & Services" → "Credentials"
+5. Create OAuth 2.0 Client ID (Desktop app type)
+6. Copy the Client ID and Client Secret
+
+See the source's guide.md for detailed instructions.`,
+            }],
+            isError: true,
+          };
+        }
+
         // Check if source has valid credentials (not just isAuthenticated flag)
         const hasValidToken = await verifySourceHasValidToken(workspaceRootPath, source, args.sourceSlug);
         if (hasValidToken) {
@@ -1481,7 +1574,6 @@ After successful authentication, the tokens are stored and the source is marked 
 
         // Determine service from config for new pattern
         let service: GoogleService | undefined;
-        const api = source.api;
 
         if (api?.googleService) {
           service = api.googleService;
@@ -1868,6 +1960,7 @@ The user will see a secure input UI with appropriate fields based on the auth mo
 - \`basic\`: Username and Password fields
 - \`header\`: API Key with custom header name shown
 - \`query\`: API Key for query parameter auth
+- \`multi-header\`: Multiple header fields (e.g., Datadog's DD-API-KEY + DD-APPLICATION-KEY)
 
 **IMPORTANT:** After calling this tool:
 - Execution will be **automatically paused** to show the credential input UI
@@ -1883,10 +1976,21 @@ source_credential_prompt({
   description: "Enter your API key from the dashboard",
   hint: "Find it at https://example.com/settings/api"
 })
+\`\`\`
+
+**Multi-header example (Datadog):**
+\`\`\`
+source_credential_prompt({
+  sourceSlug: "datadog",
+  mode: "multi-header",
+  headerNames: ["DD-API-KEY", "DD-APPLICATION-KEY"],
+  description: "Enter your Datadog API and Application keys",
+  hint: "Get keys from Organization Settings > API Keys and Application Keys"
+})
 \`\`\``,
     {
       sourceSlug: z.string().describe('The slug of the source to authenticate'),
-      mode: z.enum(['bearer', 'basic', 'header', 'query']).describe('Type of credential input'),
+      mode: z.enum(['bearer', 'basic', 'header', 'query', 'multi-header']).describe('Type of credential input'),
       labels: z.object({
         credential: z.string().optional().describe('Label for primary credential field'),
         username: z.string().optional().describe('Label for username field (basic auth)'),
@@ -1894,9 +1998,22 @@ source_credential_prompt({
       }).optional().describe('Custom field labels'),
       description: z.string().optional().describe('Description shown to user'),
       hint: z.string().optional().describe('Hint about where to find credentials'),
+      headerNames: z.array(z.string()).optional().describe('Header names for multi-header auth (e.g., ["DD-API-KEY", "DD-APPLICATION-KEY"])'),
+      passwordRequired: z.boolean().optional().describe('For basic auth: whether password field is required (default: true)'),
     },
     async (args) => {
       debug('[source_credential_prompt] Requesting credentials:', args.sourceSlug, args.mode);
+
+      // Validate that passwordRequired only applies to basic auth
+      if (args.passwordRequired !== undefined && args.mode !== 'basic') {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Error: passwordRequired parameter only applies to basic auth mode. You specified mode="${args.mode}" with passwordRequired=${args.passwordRequired}.`,
+          }],
+          isError: true,
+        };
+      }
 
       try {
         // Load source to get name and validate
@@ -1924,6 +2041,11 @@ source_credential_prompt({
           };
         }
 
+        // Auto-detect multi-header mode from source config
+        // If source has headerNames array, use multi-header mode regardless of what was passed
+        const effectiveHeaderNames = getEffectiveHeaderNames(source, args.headerNames);
+        const effectiveMode = detectCredentialMode(source, args.mode, args.headerNames);
+
         // Build auth request
         const authRequest: CredentialAuthRequest = {
           type: 'credential',
@@ -1931,13 +2053,16 @@ source_credential_prompt({
           sessionId,
           sourceSlug: args.sourceSlug,
           sourceName: source.name,
-          mode: args.mode,
+          mode: effectiveMode,
           labels: args.labels,
           description: args.description,
           hint: args.hint,
           headerName: source.api?.headerName,
+          // For multi-header auth: use provided headerNames or fall back to source config
+          headerNames: effectiveHeaderNames,
           // Pass source URL so password managers (1Password) can match stored credentials by domain
           sourceUrl: source.api?.baseUrl || source.mcp?.url,
+          passwordRequired: args.passwordRequired,
         };
 
         // Trigger auth request - this will cause the session manager to forceAbort
@@ -3492,6 +3617,8 @@ export function getSessionScopedTools(sessionId: string, workspaceRootPath: stri
         createGeminiImageTool(sessionId, workspaceRootPath),   // Legacy tool for backwards compatibility
         // Open images folder tool
         createOpenImagesFolderTool(sessionId, workspaceRootPath),
+        // LLM tool - invoke secondary Claude calls for subtasks
+        createLLMTool({ sessionId }),
       ],
     });
     sessionScopedToolsCache.set(cacheKey, cached);

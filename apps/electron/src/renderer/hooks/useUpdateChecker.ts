@@ -134,6 +134,12 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
         // If already ready, show toast (clear any previous dismissal since user explicitly checked)
         shownToastVersionRef.current = null // Reset so toast can show again
         showUpdateToast(info.latestVersion, installUpdate)
+      } else if (info.downloadState === 'downloading' && info.latestVersion) {
+        // Update is available and downloading
+        toast.info(`Downloading v${info.latestVersion}`, {
+          description: 'The update will be ready to install shortly.',
+          duration: 4000,
+        })
       }
     } catch (error) {
       console.error('[useUpdateChecker] Check failed:', error)

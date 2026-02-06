@@ -22,8 +22,8 @@ export interface FuzzyResult<T> {
   item: T
   /** Match score - higher is better */
   score: number
-  /** Character ranges for highlighting: [[start, end], ...] */
-  ranges?: number[][]
+  /** Character indices for highlighting (flat array from uFuzzy) */
+  ranges?: number[]
 }
 
 /**
@@ -58,6 +58,7 @@ export function fuzzyFilter<T>(
 
   // uFuzzy doesn't have a score property - use position in sorted order as relative score
   // Higher score = better match (reverse of order index)
+  // Note: order contains indices into idxs, and idxs contains indices into items
   const results: FuzzyResult<T>[] = []
   for (let sortPosition = 0; sortPosition < order.length; sortPosition++) {
     const orderIdx = order[sortPosition] as number
@@ -68,7 +69,7 @@ export function fuzzyFilter<T>(
     results.push({
       item,
       score: order.length - sortPosition, // Best matches first get highest scores
-      ranges: rangeData ? [rangeData] : undefined,
+      ranges: rangeData ?? undefined,
     })
   }
   return results
@@ -92,7 +93,8 @@ export function fuzzyScore(text: string, query: string): number {
   const idxs = uf.filter([text], query)
   if (!idxs || idxs.length === 0) return 0
 
-  // uFuzzy matched - return a positive score (actual score depends on sort order in list context)
+  // uFuzzy matched - return a positive score
+  // For simple single-text scoring, presence of match is what matters
   return 1
 }
 
